@@ -785,9 +785,10 @@
 
   // ===== Tesseract 7-segment OCR =====
   // Koristimo letsgodigital traineddata — Tesseract model treniran specifično
-  // za sedam-segmentne digitalne displeje (LCD/LED). Hostan na GitHubu.
+  // za sedam-segmentne digitalne displeje (LCD/LED).
+  // Model se hosta preko jsDelivr CDN-a (brz i pouzdan CORS).
 
-  const LETSGODIGITAL_URL = 'https://raw.githubusercontent.com/Shreeshrii/tessdata_shreetest/master/';
+  const LETSGODIGITAL_URL = 'https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_shreetest@master/';
   let tesseractWorker = null;
   let tesseractLoading = null;
 
@@ -807,11 +808,21 @@
         });
       }
 
-      // Stvori worker s letsgodigital modelom
+      // Stvori worker s letsgodigital modelom i progress loggerom
       const worker = await window.Tesseract.createWorker('letsgodigital', 1, {
         langPath: LETSGODIGITAL_URL,
-        // cachePath: '/' — koristi default IndexedDB cache (prvo skidanje ~1.5 MB,
-        // nakon toga iz keša)
+        logger: (m) => {
+          if (m.status === 'downloading letsgodigital' || m.status === 'loading language traineddata (from cache)') {
+            const pct = m.progress ? Math.round(m.progress * 100) : 0;
+            loadingText.textContent = 'Učitavam OCR model… ' + pct + '%';
+          } else if (m.status === 'initializing tesseract' || m.status === 'initializing api') {
+            loadingText.textContent = 'Inicijaliziram OCR…';
+          } else if (m.status === 'recognizing text') {
+            const pct = m.progress ? Math.round(m.progress * 100) : 0;
+            loadingText.textContent = 'Čitam brojke… ' + pct + '%';
+          }
+        },
+        errorHandler: (e) => console.warn('Tesseract:', e),
       });
 
       // Konfiguracija: samo brojke, jednoblok page-segmentation
@@ -988,14 +999,12 @@
 
     const canvas = await preprocessImage(file);
 
-    loadingText.textContent = 'Učitavam OCR model…';
     if (!tesseractWorker) {
+      loadingText.textContent = 'Učitavam OCR model…';
       loadingSub.classList.remove('hidden');
     }
 
     const worker = await loadTesseract();
-
-    loadingText.textContent = 'Čitam brojke…';
     loadingSub.classList.add('hidden');
 
     const result = await worker.recognize(canvas);
