@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Omron Auto-detect OCR (kamera → SYS/DIA/PULSE)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+    #wrap { position:relative; display:inline-block; }
+    video { width:min(420px, 92vw); border-radius:12px; background:#000; }
+    canvas#overlay { position:absolute; left:0; top:0; }
+    canvas#debug { width:min(420px, 92vw); border:1px solid #ddd; border-radius:12px; }
+    pre { background:#f6f6f6; padding:10px; border-radius:10px; overflow:auto; }
+    button { padding:10px 12px; border-radius:10px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+    button.primary { background:#0b5fff; color:#fff; border-color:#0b5fff; }
+    .small { color:#555; font-size:12px; line-height:1.35; }
+    .k { font-weight:600; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#eee; margin-left:6px; font-size:12px; }
+    label { display:block; margin:8px 0 4px; font-size:12px; color:#444; }
+    input[type="range"] { width: 260px; }
+  </style>
+
+  <!-- OpenCV WASM: koristimo prebuilt opencv.js + opencv.wasm s jsDelivr (opencv-wasm paket sadrži opencv.js i opencv.wasm). -->
+  <!-- Lista datoteka na CDN-u uključuje opencv.js i opencv.wasm. 【2-b8bd12】 -->
+  <script>
+    // osiguraj da opencv.js zna gdje je wasm
+    var Module = {
+      locateFile: function(path) {
+        return "https://cdn.jsdelivr.net/npm/opencv-wasm@4.3.0-10/" + path;
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/opencv-wasm@4.3.0-10/opencv.js"></script>
+  <!-- Tesseract.js preko CDN-a; createWorker i rad u browseru su dokumentirani. 【6-7fc62a】 -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+
+<body>
+  <h2>Omron auto-detect OCR (real-time)</h2>
+  <div class="small">
+    1) Start kamera  2) Drži tlakomjer tako da se LCD jasno vidi (bez refleksije)  3) Crveni okvir pokazuje auto-detect display zona.
+    <span class="badge">OCR ide samo po detektiranom displayu</span>
+  </div>
+
+  <div style="display:flex; gap:8px; margin:12px 0;">
+    <button id="start" class="primary">Start kamera</button>
+    <button id="stop">Stop</button>
+  </div>
+
+  <div class="row">
+    <div>
+      <div id="wrap">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+
+      <label>OCR interval (ms) – sporije = stabilnije</label>
+      <input id="interval" type="range" min="400" max="1500" step="50" value="800" />
+      <span id="intervalVal" class="badge">800</span>
+
+      <label>Downscale za detekciju (manje = brže, ali može promašiti)</label>
+      <input id="downscale" type="range" min="220" max="520" step="20" value="360" />
+      <span id="downscaleVal" class="badge">360</span>
+
+      <label>Minimalna površina konture (filter šuma)</label>
+      <input id="minArea" type="range" min="2000" max="30000" step="1000" value="9000" />
+      <span id="minAreaVal" class="badge">9000</span>
+    </div>
+
+    <div>
+      <div class="k">Debug (binarizirani display prije OCR-a)</div>
+      <canvas id="debug" width="420" height="240"></canvas>
+
+      <div class="k" style="margin-top:10px;">Status</div>
+      <pre id="status">idle</pre>
+
+      <div class="k">Parsed (stabilizirano)</div>
+      <pre id="parsed">—</pre>
+
+      <div class="k">Raw (zadnji OCR)</div>
+      <pre id="raw">—</pre>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d');
+
+  const debug = document.getElementById('debug');
+  const dctx = debug.getContext('2d');
+
+  const statusEl = document.getElementById('status');
+  const parsedEl = document.getElementById('parsed');
+  const rawEl = document.getElementById('raw');
+
+  const startBtn = document.getElementById('start');
+  const stopBtn  = document.getElementById('stop');
+
+  const intervalEl = document.getElementById('interval');
+  const intervalVal = document.getElementById('intervalVal');
+  const downscaleEl = document.getElementById('downscale');
+  const downscaleVal = document.getElementById('downscaleVal');
+  const minAreaEl = document.getElementById('minArea');
+  const minAreaVal = document.getElementById('minAreaVal');
+
+  intervalEl.oninput = () => intervalVal.textContent = intervalEl.value;
+  downscaleEl.oninput = () => downscaleVal.textContent = downscaleEl.value;
+  minAreaEl.oninput = () => minAreaVal.textContent = minAreaEl.value;
+
+  let stream = null;
+  let running = false;
+  let busy = false;
+
+  // OCR worker (kreira se jednom i reuse – preporuka za performanse) 【4-ac7b3c】【6-7fc62a】
+  let worker = null;
+
+  // zadnja dobra detekcija (fallback)
+  let lastBox = null; // {x,y,w,h} u VIDEO koordinatama
+
+  // stabilizacija rezultata
+  const history = { sys: [], dia: [], pulse: [] };
+  const HISTORY_N = 6;
+
+  // offscreen canvasi
+  const frameCanvas = document.createElement('canvas');
+  const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+
+  const cropCanvas = document.createElement('canvas');
+  const cctx = cropCanvas.getContext('2d', { willReadFrequently: true });
+
+  function pushHist(key, val) {
+    if (!val) return;
+    history[key].push(val);
+    if (history[key].length > HISTORY_N) history[key].shift();
+  }
+  function mode(arr) {
+    if (!arr.length) return null;
+    const m = new Map();
+    for (const x of arr) m.set(x, (m.get(x)||0)+1);
+    let best = null, bestC = -1;
+    for (const [k,v] of m.entries()) if (v > bestC) { bestC = v; best = k; }
+    return best;
+  }
+  function stable() {
+    return {
+      sys: mode(history.sys),
+      dia: mode(history.dia),
+      pulse: mode(history.pulse)
+    };
+  }
+
+  function drawOverlay(box, note) {
+    overlay.width = video.clientWidth;
+    overlay.height = video.clientHeight;
+
+    octx.clearRect(0,0,overlay.width,overlay.height);
+
+    if (!box) {
+      octx.fillStyle = "rgba(0,0,0,0.25)";
+      octx.fillRect(0,0,overlay.width,overlay.height);
+      octx.fillStyle = "rgba(255,255,255,0.9)";
+      octx.font = "12px system-ui";
+      octx.fillText("Nema detekcije displaya (pokušavam dalje)...", 12, 20);
+      return;
+    }
+
+    const sx = overlay.width / video.videoWidth;
+    const sy = overlay.height / video.videoHeight;
+
+    const x = box.x * sx, y = box.y * sy, w = box.w * sx, h = box.h * sy;
+
+    // zatamni sve osim boxa
+    octx.fillStyle = "rgba(0,0,0,0.35)";
+    octx.fillRect(0,0,overlay.width,overlay.height);
+    octx.clearRect(x,y,w,h);
+
+    // crveni okvir
+    octx.strokeStyle = "rgba(255,0,0,0.95)";
+    octx.lineWidth = 2;
+    octx.strokeRect(x,y,w,h);
+
+    octx.fillStyle = "rgba(255,0,0,0.95)";
+    octx.font = "12px system-ui";
+    octx.fillText(note || "AUTO", x+6, Math.max(14, y-6));
+  }
+
+  function extractFirstInt(text) {
+    const m = (text || "").match(/\d{2,3}/);
+    return m ? m[0] : null;
+  }
+
+  // OCR parametri: whitelist znamenki i PSM može se postaviti kroz setParameters. 【3-362737】
+  async function ensureWorker() {
+    if (worker) return;
+    statusEl.textContent = "Init Tesseract worker...";
+    worker = await Tesseract.createWorker('eng');
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789',
+      // SINGLE_BLOCK je čest izbor za “jedan blok” teksta; setParameters primjer postoji u docs. 【3-362737】
+      // (U tesseract.js PSM enum nije uvijek globalan; ova vrijednost radi kao numeric config u većini buildova.)
+      tessedit_pageseg_mode: 6
+    });
+    statusEl.textContent = "Worker ready.";
+  }
+
+  function matFromVideo() {
+    // uzmi frame iz videa
+    frameCanvas.width = video.videoWidth;
+    frameCanvas.height = video.videoHeight;
+    fctx.drawImage(video, 0, 0);
+    const imgData = fctx.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
+    return { imgData };
+  }
+
+  // AUTO-DETECT: na downscale slici nađi najveći “pravokutni” kontur (approxPolyDP=4) i uzmi boundingRect.
+  // Contours/approxPolyDP/findContours su dio OpenCV.js “Contours” tutoriala. 【5-ab1556】
+  function detectDisplayBox(imgData) {
+    const targetW = parseInt(downscaleEl.value, 10);
+    const scale = targetW / imgData.width;
+    const targetH = Math.round(imgData.height * scale);
+
+    // render downscaled u temp canvas
+    const small = document.createElement('canvas');
+    small.width = targetW;
+    small.height = targetH;
+    const sctx = small.getContext('2d', { willReadFrequently: true });
+    sctx.putImageData(imgData, 0, 0);
+    // brže: drawImage u downscale
+    const tmp = document.createElement('canvas');
+    tmp.width = targetW; tmp.height = targetH;
+    const tctx = tmp.getContext('2d', { willReadFrequently: true });
+    tctx.drawImage(frameCanvas, 0, 0, imgData.width, imgData.height, 0, 0, targetW, targetH);
+
+    // OpenCV mat
+    let src = cv.imread(tmp);
+    let gray = new cv.Mat();
+    let blur = new cv.Mat();
+    let edges = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+    cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0, 0, cv.BORDER_DEFAULT);
+    cv.Canny(blur, edges, 50, 150);
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const minArea = parseInt(minAreaEl.value, 10);
+
+    let best = null;
+    let bestArea = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      if (area < minArea) { cnt.delete(); continue; }
+
+      const peri = cv.arcLength(cnt, true);
+      let approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+      // preferiraj “četverokut”
+      if (approx.rows === 4 && area > bestArea) {
+        const r = cv.boundingRect(approx);
+        best = { x: r.x, y: r.y, w: r.width, h: r.height, scale };
+        bestArea = area;
+      } else if (!best && area > bestArea) {
+        // fallback: najveći kontur (boundingRect)
+        const r = cv.boundingRect(cnt);
+        best = { x: r.x, y: r.y, w: r.width, h: r.height, scale };
+        bestArea = area;
+      }
+
+      approx.delete();
+      cnt.delete();
+    }
+
+    src.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+
+    if (!best) return null;
+
+    // mapiraj iz downscale nazad u video koordinate
+    const inv = 1 / best.scale;
+    return {
+      x: Math.round(best.x * inv),
+      y: Math.round(best.y * inv),
+      w: Math.round(best.w * inv),
+      h: Math.round(best.h * inv)
+    };
+  }
+
+  function clampBox(box) {
+    const x = Math.max(0, Math.min(box.x, video.videoWidth - 1));
+    const y = Math.max(0, Math.min(box.y, video.videoHeight - 1));
+    const w = Math.max(10, Math.min(box.w, video.videoWidth - x));
+    const h = Math.max(10, Math.min(box.h, video.videoHeight - y));
+    return { x,y,w,h };
+  }
+
+  function preprocessDisplayToBW(box) {
+    // izreži display u cropCanvas
+    cropCanvas.width = Math.max(80, Math.round(box.w));
+    cropCanvas.height = Math.max(80, Math.round(box.h));
+    cctx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, cropCanvas.width, cropCanvas.height);
+
+    // OpenCV preprocessing: gray + Otsu threshold (crno na bijelo) + malo close
+    let src = cv.imread(cropCanvas);
+    let gray = new cv.Mat();
+    let bw = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+    // Otsu binarizacija
+    cv.threshold(gray, bw, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+
+    // morfološko “close” da popuni rupe u segmentima (pomaže 7-seg)
+    let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2,2));
+    cv.morphologyEx(bw, bw, cv.MORPH_CLOSE, kernel);
+
+    // pokaži u debug canvas
+    const out = new cv.Mat();
+    cv.cvtColor(bw, out, cv.COLOR_GRAY2RGBA);
+    cv.imshow(debug, out);
+
+    src.delete(); gray.delete(); bw.delete(); out.delete(); kernel.delete();
+
+    // vrati binarizirani display kao ImageData iz debug canvasa
+    // (OCR ćemo raditi nad debug canvasom ili cropCanvasom; ovdje koristimo debug canvas sadržaj)
+    return true;
+  }
+
+  async function ocrThreeBands() {
+    // OCR radimo na debug canvasu (binarizirano)
+    // Podijeli na 3 zone (heuristika za Omron layout). Po potrebi se “tweak-a” bez ručnog ROI.
+    const W = debug.width;
+    const H = debug.height;
+
+    const bands = {
+      sys:   { x: Math.round(W*0.12), y: Math.round(H*0.18), w: Math.round(W*0.76), h: Math.round(H*0.30) },
+      dia:   { x: Math.round(W*0.18), y: Math.round(H*0.50), w: Math.round(W*0.64), h: Math.round(H*0.22) },
+      pulse: { x: Math.round(W*0.18), y: Math.round(H*0.74), w: Math.round(W*0.64), h: Math.round(H*0.20) }
+    };
+
+    const tmp = document.createElement('canvas');
+    const tctx = tmp.getContext('2d', { willReadFrequently: true });
+
+    async function ocrBand(r) {
+      tmp.width = r.w;
+      tmp.height = r.h;
+      tctx.drawImage(debug, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      const res = await worker.recognize(tmp);
+      return res?.data?.text || "";
+    }
+
+    const sysText = await ocrBand(bands.sys);
+    const diaText = await ocrBand(bands.dia);
+    const pulseText = await ocrBand(bands.pulse);
+
+    rawEl.textContent =
+      "SYS raw: " + sysText.trim() + "\n" +
+      "DIA raw: " + diaText.trim() + "\n" +
+      "PULSE raw: " + pulseText.trim();
+
+    const sys = extractFirstInt(sysText);
+    const dia = extractFirstInt(diaText);
+    const pulse = extractFirstInt(pulseText);
+
+    pushHist('sys', sys);
+    pushHist('dia', dia);
+    pushHist('pulse', pulse);
+
+    const st = stable();
+    parsedEl.textContent = JSON.stringify(st, null, 2);
+  }
+
+  async function tick() {
+    if (!running) return;
+    if (busy) return;
+    busy = true;
+
+    try {
+      if (!video.videoWidth) { busy = false; return; }
+
+      const { imgData } = matFromVideo();
+
+      // auto-detect display box
+      let box = detectDisplayBox(imgData);
+      if (box) {
+        box = clampBox(box);
+        lastBox = box;
+        drawOverlay(box, "AUTO");
+        statusEl.textContent = "Display detektiran (AUTO). OCR...";
+      } else if (lastBox) {
+        drawOverlay(lastBox, "FALLBACK");
+        statusEl.textContent = "AUTO nije našao; koristim zadnji box (FALLBACK). OCR...";
+        box = lastBox;
+      } else {
+        drawOverlay(null);
+        statusEl.textContent = "AUTO nije našao display. Pokušavam opet...";
+        busy = false;
+        return;
+      }
+
+      // preprocess + debug render
+      preprocessDisplayToBW(box);
+
+      // OCR tri zone
+      await ocrThreeBands();
+
+      statusEl.textContent = "OK (zadnje osvježenje: " + new Date().toLocaleTimeString() + ")";
+    } catch (e) {
+      statusEl.textContent = "Greška: " + (e?.message || e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function start() {
+    if (running) return;
+    running = true;
+    statusEl.textContent = "Pokrećem kameru...";
+
+    // čekaj da OpenCV runtime bude spreman
+    if (!cv || !cv.imread) {
+      statusEl.textContent = "Čekam OpenCV runtime...";
+      await new Promise(res => {
+        const t = setInterval(() => {
+          if (cv && cv.imread) { clearInterval(t); res(); }
+        }, 50);
+      });
+    }
+
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    video.srcObject = stream;
+
+    await new Promise(res => video.onloadedmetadata = res);
+    await video.play();
+
+    overlay.width = video.clientWidth;
+    overlay.height = video.clientHeight;
+
+    await ensureWorker();
+
+    // main loop
+    const loop = async () => {
+      if (!running) return;
+      await tick();
+      setTimeout(loop, parseInt(intervalEl.value, 10));
+    };
+    loop();
+  }
+
+  async function stop() {
+    running = false;
+    busy = false;
+    lastBox = null;
+    history.sys.length = history.dia.length = history.pulse.length = 0;
+
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    video.srcObject = null;
+
+    if (worker) { await worker.terminate(); worker = null; }
+
+    statusEl.textContent = "Stopped";
+    rawEl.textContent = "—";
+    parsedEl.textContent = "—";
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    dctx.clearRect(0,0,debug.width,debug.height);
+  }
+
+  startBtn.addEventListener('click', start);
+  stopBtn.addEventListener('click', stop);
+})();
+</script>
+</body>
+</html>
