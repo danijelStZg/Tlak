@@ -1,0 +1,292 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Omron OCR Full</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<style>
+body { font-family: system-ui; padding: 10px; }
+video { width: 360px; border-radius: 10px; }
+#wrap { position: relative; display: inline-block; }
+canvas { position: absolute; top:0; left:0; }
+pre { background:#f5f5f5; padding:10px; margin-top:10px; }
+</style>
+
+<script>
+var Module = {
+  locateFile: path => "https://cdn.jsdelivr.net/npm/opencv-wasm@4.3.0-10/" + path
+};
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/opencv-wasm/"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+</head>
+
+<body>
+
+<h3>Omron full OCR</h3>
+
+<button onclick="start()">Start</button>
+<button onclick="stop()">Stop</button>
+
+<br><br>
+
+<div id="wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<pre id="status">Klikni Start</pre>
+<pre id="result">---</pre>
+
+<script>
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+
+let stream = null;
+let worker = null;
+let running = false;
+
+let history = {
+  sys: [],
+  dia: [],
+  pulse: []
+};
+
+function stabilize(arr) {
+  if (!arr.length) return null;
+  let c = {};
+  arr.forEach(v => c[v] = (c[v]||0)+1);
+  return Object.keys(c).sort((a,b)=>c[b]-c[a])[0];
+}
+
+function push(vals){
+  if(!vals) return;
+
+  if(vals[0]) history.sys.push(vals[0]);
+  if(vals[1]) history.dia.push(vals[1]);
+  if(vals[2]) history.pulse.push(vals[2]);
+
+  if(history.sys.length>5) history.sys.shift();
+  if(history.dia.length>5) history.dia.shift();
+  if(history.pulse.length>5) history.pulse.shift();
+}
+
+//////////////////////////////////////////////////////////////////
+// ✅ FIXED START FUNCTION (ovo je ključ!)
+//////////////////////////////////////////////////////////////////
+async function start() {
+  try {
+    statusEl.innerText = "Pokrećem kameru...";
+
+    // ✅ test kamera
+    const test = await navigator.mediaDevices.getUserMedia({ video:true });
+    test.getTracks().forEach(t=>t.stop());
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio:false
+    });
+
+    video.srcObject = stream;
+
+    await new Promise(resolve => {
+      video.onloadedmetadata = () => {
+        video.play().then(resolve);
+      };
+    });
+
+    if (!video.videoWidth) {
+      throw new Error("video width = 0");
+    }
+
+    overlay.width = video.clientWidth;
+    overlay.height = video.clientHeight;
+
+    worker = await Tesseract.createWorker('eng');
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789'
+    });
+
+    running = true;
+    loop();
+
+    statusEl.innerText = "✅ Kamera radi";
+
+  } catch(e) {
+    statusEl.innerText = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+//////////////////////////////////////////////////////////////////
+// MAIN LOOP
+//////////////////////////////////////////////////////////////////
+async function loop(){
+  if(!running) return;
+
+  let box = detect();
+
+  draw(box);
+
+  if(box){
+    let canvas = preprocess(box);
+    let vals = await read(canvas);
+
+    push(vals);
+
+    resultEl.innerText = JSON.stringify({
+      sys: stabilize(history.sys),
+      dia: stabilize(history.dia),
+      pulse: stabilize(history.pulse)
+    }, null, 2);
+  }
+
+  setTimeout(loop, 800);
+}
+
+//////////////////////////////////////////////////////////////////
+// AUTODETECT DISPLAY
+//////////////////////////////////////////////////////////////////
+function detect(){
+  if(!video.videoWidth) return null;
+
+  let c = document.createElement('canvas');
+  c.width = video.videoWidth;
+  c.height = video.videoHeight;
+  let cx = c.getContext('2d');
+  cx.drawImage(video,0,0);
+
+  let src = cv.imread(c);
+  let gray = new cv.Mat();
+  let edges = new cv.Mat();
+
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.Canny(gray, edges, 50, 150);
+
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  let best=null, maxArea=0;
+
+  for(let i=0;i<contours.size();i++){
+    let cnt = contours.get(i);
+    let area = cv.contourArea(cnt);
+
+    if(area > maxArea){
+      best = cv.boundingRect(cnt);
+      maxArea = area;
+    }
+  }
+
+  src.delete(); gray.delete(); edges.delete();
+  contours.delete(); hierarchy.delete();
+
+  return best;
+}
+
+//////////////////////////////////////////////////////////////////
+// DRAW
+//////////////////////////////////////////////////////////////////
+function draw(box){
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+
+  if(!box) return;
+
+  let sx = overlay.width/video.videoWidth;
+  let sy = overlay.height/video.videoHeight;
+
+  ctx.strokeStyle="red";
+  ctx.lineWidth=2;
+
+  ctx.strokeRect(box.x*sx, box.y*sy, box.width*sx, box.height*sy);
+}
+
+//////////////////////////////////////////////////////////////////
+// PREPROCESS
+//////////////////////////////////////////////////////////////////
+function preprocess(box){
+  let c = document.createElement('canvas');
+  let cx = c.getContext('2d');
+
+  c.width = box.width*0.6;
+  c.height = box.height*0.6;
+
+  cx.drawImage(video,
+    box.x,box.y,box.width,box.height,
+    0,0,c.width,c.height);
+
+  let img=cx.getImageData(0,0,c.width,c.height);
+  let d=img.data;
+
+  for(let i=0;i<d.length;i+=4){
+    let g=(d[i]+d[i+1]+d[i+2])/3;
+    let v=g>130?255:0;
+    d[i]=d[i+1]=d[i+2]=v;
+  }
+
+  cx.putImageData(img,0,0);
+
+  return c;
+}
+
+//////////////////////////////////////////////////////////////////
+// OCR
+//////////////////////////////////////////////////////////////////
+async function read(canvas){
+  let h = canvas.height;
+
+  let zones = [
+    {y:0,h:h/3},
+    {y:h/3,h:h/3},
+    {y:2*h/3,h:h/3}
+  ];
+
+  let out=[];
+
+  for(let z of zones){
+    let c=document.createElement('canvas');
+    c.width=canvas.width;
+    c.height=z.h;
+
+    let cx=c.getContext('2d');
+    cx.drawImage(canvas,0,z.y,c.width,z.h,0,0,c.width,z.h);
+
+    let res = await worker.recognize(c);
+    let num = (res.data.text.match(/\\d+/)||[])[0];
+
+    out.push(num);
+  }
+
+  return out;
+}
+
+//////////////////////////////////////////////////////////////////
+// STOP
+//////////////////////////////////////////////////////////////////
+function stop(){
+  running=false;
+
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+  }
+
+  if(worker){
+    worker.terminate();
+  }
+
+  statusEl.innerText="Stop";
+}
+
+</script>
+
+</body>
+</html>
+``
