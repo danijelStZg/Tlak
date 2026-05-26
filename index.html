@@ -210,7 +210,14 @@
       });
       video.srcObject = stream;
 
-      await new Promise(resolve => video.onloadedmetadata = resolve);
+      
+wait new Promise(resolve => {
+  video.onloadedmetadata = () => {
+    video.play();
+    resolve();
+  };
+});
+
 
       // uskladi overlay s video elementom
       drawOverlay();
