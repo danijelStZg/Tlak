@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0d6efd" />
+  <title>Tlakomjer OCR — OMRON Precise 3.11</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <h1>Tlakomjer OCR — OMRON Precise 3.11</h1>
+      <p>Novi pristup rotaciji: detektira <strong>najjače horizontalne rubove</strong> u slici (donji rub LCD-a, Intelli sense granica, gumbi) — svi dijele isti nagib pa kut koji ih sve poravna u vodoravne pruge je pravi kut nagiba.</p>
+    </header>
+
+    <section class="card">
+      <h2>1. Učitaj fotografiju</h2>
+      <div class="upload-row wrap">
+        <button id="cameraBtn">📷 Snimi kamerom</button>
+        <input id="imageInput" type="file" accept="image/*" capture="environment" />
+        <button id="demoBtn" class="secondary">Učitaj demo primjer</button>
+      </div>
+      <p class="muted">Snimi tlakomjer kamerom (slika nije nigdje pohranjena), odaberi iz galerije, ili učitaj demo. Aplikacija automatski ispravlja blagi nagib slike.</p>
+      <div class="preview-grid">
+        <div><div class="preview-title">Original</div><img id="preview" hidden /></div>
+        <div><div class="preview-title">Debug / procesirano</div><img id="processedPreview" hidden /></div>
+      </div>
+      <canvas id="workCanvas" hidden></canvas>
+    </section>
+
+    <!-- Camera modal -->
+    <div id="cameraModal" class="camera-modal" hidden>
+      <div class="camera-modal-inner">
+        <video id="cameraVideo" playsinline autoplay muted></video>
+        <div class="camera-modal-actions">
+          <button id="cameraSnapBtn">Uslikaj</button>
+          <button id="cameraCancelBtn" class="secondary">Otkaži</button>
+        </div>
+        <p class="muted">Drži zaslon tlakomjera unutar kadra. Slika nije nigdje pohranjena.</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>2. Čitanje</h2>
+      <div class="actions wrap">
+        <button id="preciseBtn">Precizni OMRON parser</button>
+        <button id="ocrBtn" class="secondary">Fallback OCR</button>
+      </div>
+      <div id="status" class="status">Spremno.</div>
+      <details><summary>Dijagnostika</summary><pre id="diagText"></pre></details>
+    </section>
+
+    <section class="card">
+      <h2>3. Provjeri i spremi</h2>
+      <form id="readingForm" class="form-grid">
+        <label>Sistolički (SYS)<input id="sys" type="number" inputmode="numeric" min="40" max="280" required /></label>
+        <label>Dijastolički (DIA)<input id="dia" type="number" inputmode="numeric" min="30" max="180" required /></label>
+        <label>Puls<input id="pulse" type="number" inputmode="numeric" min="30" max="220" required /></label>
+        <label>Datum i vrijeme<input id="timestamp" type="datetime-local" required /></label>
+        <label class="full">Napomena<input id="note" type="text" maxlength="120" /></label>
+        <div class="full row end"><button type="submit">Spremi u povijest</button></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="row space-between wrap">
+        <h2>Povijest mjerenja</h2>
+        <div class="row wrap">
+          <button id="exportBtn" class="secondary">Izvoz CSV</button>
+          <button id="clearBtn" class="danger">Obriši povijest</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Datum</th><th>SYS</th><th>DIA</th><th>Puls</th><th>Napomena</th><th></th></tr></thead><tbody id="historyBody"></tbody></table></div>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
