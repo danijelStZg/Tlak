@@ -1,1243 +1,274 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="hr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#f5f1ea">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Tlak">
-<meta name="mobile-web-app-capable" content="yes">
-<title>Dnevnik tlaka</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #f5f1ea;
-    --bg-elevated: #fdfbf6;
-    --ink: #1a1410;
-    --ink-soft: #5a4f44;
-    --ink-muted: #9a8d7e;
-    --accent: #c8442a;
-    --accent-soft: #f4d4c8;
-    --line: #e5dcc9;
-    --line-soft: #ede5d3;
-    --good: #2d6a4f;
-    --warn: #c97b1a;
-    --bad: #b02418;
-    --radius: 18px;
-    --radius-sm: 12px;
-    --shadow: 0 1px 0 rgba(26, 20, 16, 0.04), 0 4px 16px -8px rgba(26, 20, 16, 0.12);
-    --safe-top: env(safe-area-inset-top, 0px);
-    --safe-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-
-  html, body {
-    margin: 0;
-    padding: 0;
-    overscroll-behavior-y: contain;
-  }
-
-  body {
-    background: var(--bg);
-    color: var(--ink);
-    font-family: 'Inter Tight', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -webkit-text-size-adjust: 100%;
-    min-height: 100vh;
-    min-height: 100dvh;
-    background-image:
-      radial-gradient(ellipse 800px 400px at 50% -100px, rgba(200, 68, 42, 0.08), transparent),
-      radial-gradient(ellipse 600px 300px at 100% 100%, rgba(45, 106, 79, 0.05), transparent);
-  }
-
-  /* Sprječava zoom na input focus na iOS */
-  input, button, select, textarea {
-    font-family: inherit;
-    font-size: 16px;
-  }
-
-  #app {
-    max-width: 520px;
-    margin: 0 auto;
-    padding: calc(20px + var(--safe-top)) 16px calc(24px + var(--safe-bottom));
-  }
-
-  .app-header {
-    margin-bottom: 22px;
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 6px;
-  }
-
-  .pulse-icon {
-    width: 38px;
-    height: 38px;
-    background: var(--ink);
-    color: var(--bg-elevated);
-    border-radius: 11px;
-    display: grid;
-    place-items: center;
-    padding: 7px;
-    flex-shrink: 0;
-  }
-
-  .pulse-icon svg { width: 100%; height: 100%; }
-
-  h1 {
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 800;
-    font-size: 26px;
-    margin: 0;
-    letter-spacing: -0.02em;
-    line-height: 1.1;
-  }
-
-  .subtitle {
-    margin: 0;
-    color: var(--ink-soft);
-    font-size: 14px;
-    line-height: 1.4;
-  }
-
-  .card {
-    background: var(--bg-elevated);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 16px;
-    box-shadow: var(--shadow);
-    margin-bottom: 16px;
-  }
-
-  #preview-area {
-    background: var(--bg);
-    border-radius: var(--radius-sm);
-    aspect-ratio: 3 / 4;
-    max-height: 80vh;
-    min-height: 400px;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    margin-bottom: 14px;
-    border: 1px dashed var(--line);
-    position: relative;
-  }
-
-  #empty-state {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    color: var(--ink-muted);
-    padding: 20px;
-  }
-
-  #empty-state svg {
-    width: 52px;
-    height: 52px;
-    margin-bottom: 10px;
-    opacity: 0.7;
-  }
-
-  #empty-state p {
-    margin: 0;
-    font-size: 14px;
-  }
-
-  #preview-img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: none;
-  }
-
-  #preview-img.shown { display: block; }
-  #empty-state.hidden { display: none; }
-
-  .capture-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  .btn {
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-    font-weight: 600;
-    font-size: 15px;
-    padding: 14px 16px;
-    min-height: 50px;
-    border-radius: 12px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    transition: transform 0.1s ease, background 0.15s ease, opacity 0.15s ease;
-    touch-action: manipulation;
-    user-select: none;
-  }
-
-  .btn:active { transform: scale(0.96); }
-  .btn:disabled { opacity: 0.5; }
-  .btn svg { width: 20px; height: 20px; flex-shrink: 0; }
-
-  .btn-primary {
-    background: var(--ink);
-    color: var(--bg-elevated);
-  }
-
-  .btn-ghost {
-    background: transparent;
-    color: var(--ink);
-    border: 1px solid var(--line);
-  }
-
-  .btn-save {
-    background: var(--accent);
-    color: white;
-    width: 100%;
-    padding: 16px;
-    min-height: 54px;
-    font-size: 16px;
-    margin-top: 4px;
-  }
-
-  .btn-save:active { background: #a8381f; }
-
-  .loading {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 14px;
-    padding: 28px 20px;
-    color: var(--ink-soft);
-    text-align: center;
-  }
-
-  .loading p { margin: 0; }
-
-  .loading-sub {
-    font-size: 12px;
-    color: var(--ink-muted);
-    max-width: 280px;
-  }
-
-  .spinner {
-    width: 36px;
-    height: 36px;
-    border: 3px solid var(--line);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .error {
-    background: #fdeae6;
-    color: var(--bad);
-    padding: 14px;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    margin-bottom: 12px;
-    line-height: 1.45;
-  }
-
-  #error-text {
-    margin-bottom: 10px;
-  }
-
-  .btn-retry {
-    background: white;
-    color: var(--bad);
-    border: 1px solid currentColor;
-    width: 100%;
-    padding: 11px;
-    min-height: 44px;
-    font-size: 14px;
-  }
-
-  .btn-retry:active { background: #fdeae6; }
-
-  .card h2 {
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 600;
-    font-size: 18px;
-    margin: 0 0 14px;
-    letter-spacing: -0.01em;
-  }
-
-  .values-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-
-  .value-field {
-    background: var(--bg);
-    border-radius: var(--radius-sm);
-    padding: 12px 4px 10px;
-    text-align: center;
-    border: 1px solid var(--line-soft);
-    transition: border-color 0.15s ease;
-  }
-
-  .value-field:focus-within {
-    border-color: var(--ink);
-  }
-
-  .value-field label {
-    display: block;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--ink-muted);
-    letter-spacing: 0.08em;
-    margin-bottom: 6px;
-  }
-
-  .value-field input {
-    width: 100%;
-    border: none;
-    background: transparent;
-    text-align: center;
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 600;
-    font-size: 30px;
-    line-height: 1;
-    color: var(--ink);
-    padding: 0;
-    -moz-appearance: textfield;
-  }
-
-  .value-field input::-webkit-outer-spin-button,
-  .value-field input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-
-  .value-field input:focus { outline: none; }
-
-  .value-field .unit {
-    display: block;
-    font-size: 10px;
-    color: var(--ink-muted);
-    margin-top: 4px;
-  }
-
-  .datetime-row {
-    margin-bottom: 14px;
-  }
-
-  .datetime-row label {
-    display: block;
-    font-size: 12px;
-    color: var(--ink-soft);
-    margin-bottom: 6px;
-    font-weight: 500;
-  }
-
-  .datetime-row input {
-    width: 100%;
-    padding: 13px 14px;
-    border: 1px solid var(--line);
-    background: var(--bg);
-    border-radius: var(--radius-sm);
-    color: var(--ink);
-    min-height: 48px;
-    appearance: none;
-    -webkit-appearance: none;
-  }
-
-  .datetime-row input:focus {
-    outline: none;
-    border-color: var(--ink);
-  }
-
-  .category-badge {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 11px 14px;
-    border-radius: var(--radius-sm);
-    margin-bottom: 14px;
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .category-badge.normal { background: #e8f1ec; color: var(--good); }
-  .category-badge.elevated { background: #fbf0dd; color: var(--warn); }
-  .category-badge.high { background: #fdeae6; color: var(--bad); }
-  .category-badge:empty { display: none; }
-
-  .category-badge::before {
-    content: '';
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: currentColor;
-    flex-shrink: 0;
-  }
-
-  .history-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-
-  .history-header h2 {
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 600;
-    font-size: 18px;
-    margin: 0;
-    letter-spacing: -0.01em;
-  }
-
-  .count-pill {
-    background: var(--ink);
-    color: var(--bg-elevated);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 3px 10px;
-    border-radius: 12px;
-  }
-
-  .history-item {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 10px;
-    padding: 14px 0;
-    border-bottom: 1px solid var(--line-soft);
-    align-items: center;
-  }
-
-  .history-item:first-child { padding-top: 4px; }
-  .history-item:last-child { border-bottom: none; padding-bottom: 4px; }
-
-  .history-values {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .h-main {
-    font-family: 'Fraunces', Georgia, serif;
-    font-weight: 600;
-    font-size: 22px;
-    letter-spacing: -0.01em;
-    line-height: 1;
-  }
-
-  .h-pulse {
-    font-size: 13px;
-    color: var(--ink-soft);
-  }
-
-  .h-pulse::before {
-    content: '♥ ';
-    color: var(--accent);
-  }
-
-  .h-date {
-    font-size: 12px;
-    color: var(--ink-muted);
-    margin-top: 4px;
-  }
-
-  .h-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .h-dot.normal { background: var(--good); }
-  .h-dot.elevated { background: var(--warn); }
-  .h-dot.high { background: var(--bad); }
-
-  .delete-btn {
-    background: none;
-    border: none;
-    color: var(--ink-muted);
-    cursor: pointer;
-    padding: 10px;
-    border-radius: 8px;
-    display: grid;
-    place-items: center;
-    min-width: 44px;
-    min-height: 44px;
-    touch-action: manipulation;
-  }
-
-  .delete-btn:active { color: var(--bad); background: #fdeae6; }
-  .delete-btn svg { width: 18px; height: 18px; }
-
-  .history-empty {
-    text-align: center;
-    padding: 20px;
-    color: var(--ink-muted);
-    font-size: 13px;
-  }
-
-  .history-empty p { margin: 0; }
-
-  .hidden { display: none !important; }
-
-  /* Toast za potvrdu spremanja */
-  .toast {
-    position: fixed;
-    bottom: calc(20px + var(--safe-bottom));
-    left: 50%;
-    transform: translateX(-50%) translateY(100px);
-    background: var(--ink);
-    color: var(--bg-elevated);
-    padding: 12px 20px;
-    border-radius: 999px;
-    font-size: 14px;
-    font-weight: 500;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .toast.shown {
-    transform: translateX(-50%) translateY(0);
-  }
-
-  .toast svg { width: 18px; height: 18px; }
-
-  /* Vrlo uski ekrani (iPhone SE i slično) */
-  @media (max-width: 360px) {
-    #app { padding-left: 12px; padding-right: 12px; }
-    .value-field input { font-size: 26px; }
-    .value-field { padding: 10px 2px 8px; }
-    h1 { font-size: 23px; }
-    .h-main { font-size: 20px; }
-  }
-
-  /* Sprječavanje long-press selectiona */
-  .btn, .h-main, .h-date, .pulse-icon, h1, .subtitle, label {
-    -webkit-user-select: none;
-    user-select: none;
-  }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Real-time OCR tlakomjer (browser)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+    .panel { max-width: 420px; }
+    #wrap { position: relative; display: inline-block; }
+    video { width: min(420px, 92vw); border-radius: 10px; background:#000; }
+    canvas#overlay { position: absolute; left: 0; top: 0; pointer-events: auto; }
+    pre { background: #f6f6f6; padding: 10px; border-radius: 8px; overflow:auto; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button.primary { background:#0b5fff; color:#fff; border-color:#0b5fff; }
+    small { color: #555; }
+  </style>
 </head>
 <body>
+  <h2>Real-time očitanje tlakomjera (kamera → brojevi)</h2>
 
-<div id="app">
-  <header class="app-header">
-    <div class="brand">
-      <div class="pulse-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M3 12h4l3-9 4 18 3-9h4"/>
-        </svg>
+  <div class="row">
+    <div class="panel">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button id="start" class="primary">Start kamera</button>
+        <button id="stop">Stop</button>
       </div>
-      <h1>Dnevnik tlaka</h1>
-    </div>
-    <p class="subtitle">Slikaj zaslon tlakomjera — vrijednosti se očitaju automatski</p>
-  </header>
+      <small>
+        1) Klikni “Start kamera”  2) Povuci pravokutnik preko brojki (ROI)  3) Očitavanje kreće automatski.
+      </small>
 
-  <section class="card">
-    <div id="preview-area">
-      <div id="empty-state">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="3" y="6" width="18" height="14" rx="2"/>
-          <circle cx="12" cy="13" r="4"/>
-          <path d="M8 6l2-3h4l2 3"/>
-        </svg>
-        <p>Otvori kameru ili odaberi sliku</p>
+      <div id="wrap" style="margin-top:10px;">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="overlay"></canvas>
       </div>
-      <img id="preview-img" alt="" />
     </div>
 
-    <div class="capture-actions">
-      <label class="btn btn-primary">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="6" width="18" height="14" rx="2"/>
-          <circle cx="12" cy="13" r="4"/>
-          <path d="M8 6l2-3h4l2 3"/>
-        </svg>
-        <span>Slikaj</span>
-        <input type="file" accept="image/*" capture="environment" id="camera-input" hidden>
-      </label>
-      <label class="btn btn-ghost">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M4 4h16v16H4z"/>
-          <path d="M4 16l5-5 4 4 7-7"/>
-        </svg>
-        <span>Iz galerije</span>
-        <input type="file" accept="image/*" id="gallery-input" hidden>
-      </label>
+    <div class="panel">
+      <h3>OCR raw</h3>
+      <pre id="raw">—</pre>
+
+      <h3>Parsed (SYS/DIA/PULSE)</h3>
+      <pre id="parsed">—</pre>
+
+      <h3>Status</h3>
+      <pre id="status">idle</pre>
     </div>
-  </section>
+  </div>
 
-  <section id="result-card" class="card hidden">
-    <div id="loading-state" class="loading hidden">
-      <div class="spinner"></div>
-      <p id="loading-text">Očitavam vrijednosti…</p>
-      <p id="loading-sub" class="loading-sub hidden">Prvi put učitavam OCR model (~1.5 MB)</p>
-    </div>
+  <!-- Tesseract.js preko CDN-a; nakon toga je globalno dostupan Tesseract i možeš kreirati worker. 【3-29ec72】 -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
-    <div id="error-state" class="error hidden">
-      <div id="error-text"></div>
-      <button id="retry-btn" class="btn btn-retry">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-          <path d="M3 12a9 9 0 019-9 9 9 0 018 5"/>
-          <path d="M21 4v5h-5"/>
-          <path d="M21 12a9 9 0 01-9 9 9 9 0 01-8-5"/>
-          <path d="M3 20v-5h5"/>
-        </svg>
-        <span>Pokušaj ponovo</span>
-      </button>
-    </div>
+  <script>
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const octx = overlay.getContext('2d');
 
-    <div id="values-state" class="hidden">
-      <h2>Provjeri i spremi</h2>
-      <div class="values-grid">
-        <div class="value-field">
-          <label for="sys-input">SYS</label>
-          <input type="number" id="sys-input" inputmode="numeric" pattern="[0-9]*" min="50" max="250">
-          <span class="unit">mmHg</span>
-        </div>
-        <div class="value-field">
-          <label for="dia-input">DIA</label>
-          <input type="number" id="dia-input" inputmode="numeric" pattern="[0-9]*" min="30" max="150">
-          <span class="unit">mmHg</span>
-        </div>
-        <div class="value-field">
-          <label for="pulse-input">PULS</label>
-          <input type="number" id="pulse-input" inputmode="numeric" pattern="[0-9]*" min="30" max="200">
-          <span class="unit">bpm</span>
-        </div>
-      </div>
+    const rawEl = document.getElementById('raw');
+    const parsedEl = document.getElementById('parsed');
+    const statusEl = document.getElementById('status');
 
-      <div class="datetime-row">
-        <label for="datetime-input">Datum i vrijeme</label>
-        <input type="datetime-local" id="datetime-input">
-      </div>
+    const startBtn = document.getElementById('start');
+    const stopBtn  = document.getElementById('stop');
 
-      <div id="category-badge" class="category-badge"></div>
+    // Offscreen canvas za OCR (brže, manja rezolucija)
+    const work = document.createElement('canvas');
+    const wctx = work.getContext('2d', { willReadFrequently: true });
 
-      <button id="save-btn" class="btn btn-save">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M5 12l5 5L20 7"/>
-        </svg>
-        <span>Spremi mjerenje</span>
-      </button>
-    </div>
-  </section>
+    let stream = null;
+    let worker = null;
+    let running = false;
+    let busy = false;
 
-  <section class="card">
-    <div class="history-header">
-      <h2>Povijest</h2>
-      <span id="history-count" class="count-pill">0</span>
-    </div>
-    <div id="history-list"></div>
-    <div id="history-empty" class="history-empty">
-      <p>Još nema spremljenih mjerenja</p>
-    </div>
-  </section>
-</div>
+    // ROI selekcija
+    let roi = { x: 40, y: 60, w: 220, h: 180 }; // default, možeš povući
+    let dragging = false;
+    let dragStart = null;
 
-<div id="toast" class="toast">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-    <path d="M5 12l5 5L20 7"/>
-  </svg>
-  <span id="toast-text">Spremljeno</span>
-</div>
+    // Throttle (npr. 700ms između OCR runova)
+    let lastRun = 0;
+    const OCR_INTERVAL_MS = 700;
 
-<script type="module">
-  const $ = (id) => document.getElementById(id);
+    function drawOverlay() {
+      if (!video.videoWidth) return;
+      overlay.width = video.clientWidth;
+      overlay.height = video.clientHeight;
 
-  const cameraInput = $('camera-input');
-  const galleryInput = $('gallery-input');
-  const previewImg = $('preview-img');
-  const emptyState = $('empty-state');
-  const resultCard = $('result-card');
-  const loadingState = $('loading-state');
-  const errorState = $('error-state');
-  const errorText = $('error-text');
-  const retryBtn = $('retry-btn');
-  const valuesState = $('values-state');
-  const sysInput = $('sys-input');
-  const diaInput = $('dia-input');
-  const pulseInput = $('pulse-input');
-  const datetimeInput = $('datetime-input');
-  const categoryBadge = $('category-badge');
-  const saveBtn = $('save-btn');
-  const historyList = $('history-list');
-  const historyEmpty = $('history-empty');
-  const historyCount = $('history-count');
-  const toast = $('toast');
-  const toastText = $('toast-text');
-  const loadingText = $('loading-text');
-  const loadingSub = $('loading-sub');
+      octx.clearRect(0,0,overlay.width,overlay.height);
 
-  let lastFile = null;
+      // ROI okvir
+      octx.strokeStyle = 'rgba(255,0,0,0.9)';
+      octx.lineWidth = 2;
+      octx.strokeRect(roi.x, roi.y, roi.w, roi.h);
 
-  // --- Klasifikacija po ESH grubim pragovima ---
-  function classify(sys, dia) {
-    if (sys >= 140 || dia >= 90) return { key: 'high', label: 'Povišen tlak' };
-    if (sys >= 130 || dia >= 85) return { key: 'elevated', label: 'Granično povišen' };
-    return { key: 'normal', label: 'Unutar normale' };
-  }
+      // zatamnjenje izvan ROI
+      octx.fillStyle = 'rgba(0,0,0,0.25)';
+      octx.fillRect(0,0,overlay.width,overlay.height);
+      octx.clearRect(roi.x, roi.y, roi.w, roi.h);
 
-  function updateCategory() {
-    const s = parseInt(sysInput.value, 10);
-    const d = parseInt(diaInput.value, 10);
-    if (isNaN(s) || isNaN(d)) {
-      categoryBadge.className = 'category-badge';
-      categoryBadge.textContent = '';
-      return;
-    }
-    const c = classify(s, d);
-    categoryBadge.className = 'category-badge ' + c.key;
-    categoryBadge.textContent = c.label;
-  }
-
-  [sysInput, diaInput].forEach(el => el.addEventListener('input', updateCategory));
-
-  // --- File → data URL (radi u artifact iframeu, za razliku od createObjectURL) ---
-  function readAsDataURL(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(new Error('Greška pri čitanju datoteke'));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // --- Resize slike prije slanja (smanjuje upload na mobilnoj mreži) ---
-  async function resizeImage(file, maxSize = 1600) {
-    let dataUrl;
-    try {
-      dataUrl = await readAsDataURL(file);
-    } catch (err) {
-      throw new Error('Datoteka se ne može pročitati');
+      // Label
+      octx.fillStyle = 'rgba(255,0,0,0.9)';
+      octx.font = '12px system-ui';
+      octx.fillText('ROI', roi.x + 4, Math.max(12, roi.y - 6));
     }
 
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        try {
-          let { width, height } = img;
-          if (!width || !height) {
-            return reject(new Error('Slika nema dimenzije'));
-          }
-          if (width > maxSize || height > maxSize) {
-            const ratio = Math.min(maxSize / width, maxSize / height);
-            width = Math.round(width * ratio);
-            height = Math.round(height * ratio);
-          }
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
+    function clampRoi() {
+      roi.x = Math.max(0, Math.min(roi.x, overlay.width - 10));
+      roi.y = Math.max(0, Math.min(roi.y, overlay.height - 10));
+      roi.w = Math.max(20, Math.min(roi.w, overlay.width - roi.x));
+      roi.h = Math.max(20, Math.min(roi.h, overlay.height - roi.y));
+    }
 
-          // Pokušaj toBlob; fallback na toDataURL ako blob ne uspije (Safari edge case)
-          const finish = (base64) => resolve({ base64, mediaType: 'image/jpeg' });
-          try {
-            canvas.toBlob((blob) => {
-              if (!blob) {
-                // fallback
-                const d = canvas.toDataURL('image/jpeg', 0.85);
-                return finish(d.split(',')[1]);
-              }
-              const reader = new FileReader();
-              reader.onload = () => finish(reader.result.split(',')[1]);
-              reader.onerror = () => {
-                const d = canvas.toDataURL('image/jpeg', 0.85);
-                finish(d.split(',')[1]);
-              };
-              reader.readAsDataURL(blob);
-            }, 'image/jpeg', 0.85);
-          } catch {
-            const d = canvas.toDataURL('image/jpeg', 0.85);
-            finish(d.split(',')[1]);
-          }
-        } catch (e) {
-          reject(new Error('Obrada slike nije uspjela'));
-        }
+    function overlayToVideoScale() {
+      // map overlay koordinata na stvarnu video rezoluciju
+      const sx = video.videoWidth / overlay.width;
+      const sy = video.videoHeight / overlay.height;
+      return { sx, sy };
+    }
+
+    // Jednostavan binarni threshold (pomaže 7-seg)
+    function preprocessToBW() {
+      const img = wctx.getImageData(0, 0, work.width, work.height);
+      const d = img.data;
+      for (let i=0; i<d.length; i+=4) {
+        const gray = (d[i] + d[i+1] + d[i+2]) / 3;
+        const v = gray > 140 ? 255 : 0; // prag; po potrebi ćeš kasnije “tweakati”
+        d[i] = d[i+1] = d[i+2] = v;
+      }
+      wctx.putImageData(img, 0, 0);
+    }
+
+    function parseSysDiaPulse(text) {
+      const nums = (text || "").match(/\d+/g) || [];
+      const clean = nums.map(n => n.trim()).filter(n => n.length >= 2 && n.length <= 3);
+
+      // Heuristika: prva tri “normalna” broja
+      return {
+        sys: clean[0] || null,
+        dia: clean[1] || null,
+        pulse: clean[2] || null
       };
-      img.onerror = () => reject(new Error('Slika se ne može učitati'));
-      img.src = dataUrl;
-    });
-  }
+    }
 
-  // ===== Tesseract 7-segment OCR =====
-  // Koristimo letsgodigital traineddata — Tesseract model treniran specifično
-  // za sedam-segmentne digitalne displeje (LCD/LED).
-  // Model se hosta preko jsDelivr CDN-a (brz i pouzdan CORS).
+    async function ensureWorker() {
+      if (worker) return;
+      statusEl.textContent = "init worker...";
+      // Preporuka: kreirati worker jednom i reuse za više jobova, radi performansi. 【4-184b3c】
+      worker = await Tesseract.createWorker('eng'); // primjer createWorker iz dokumentacije 【3-29ec72】
+      statusEl.textContent = "worker ready";
+    }
 
-  const LETSGODIGITAL_URL = 'https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_shreetest@master/';
-  let tesseractWorker = null;
-  let tesseractLoading = null;
+    async function ocrTick() {
+      if (!running) return;
 
-  async function loadTesseract() {
-    if (tesseractWorker) return tesseractWorker;
-    if (tesseractLoading) return tesseractLoading;
+      // Throttling: nemoj OCR svaki frame (inače preteško). 【5-11413b】
+      const now = Date.now();
+      if (now - lastRun < OCR_INTERVAL_MS || busy) {
+        requestAnimationFrame(ocrTick);
+        return;
+      }
+      lastRun = now;
+      busy = true;
 
-    tesseractLoading = (async () => {
-      // Dinamičko učitavanje Tesseract.js biblioteke
-      if (!window.Tesseract) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-          s.onload = resolve;
-          s.onerror = () => reject(new Error('Tesseract.js se ne može učitati'));
-          document.head.appendChild(s);
+      try {
+        drawOverlay();
+
+        const { sx, sy } = overlayToVideoScale();
+        const vx = Math.round(roi.x * sx);
+        const vy = Math.round(roi.y * sy);
+        const vw = Math.round(roi.w * sx);
+        const vh = Math.round(roi.h * sy);
+
+        // Skaliraj ROI na manju rezoluciju (brže)
+        const scale = 0.6;
+        work.width = Math.max(60, Math.round(vw * scale));
+        work.height = Math.max(60, Math.round(vh * scale));
+
+        wctx.drawImage(video, vx, vy, vw, vh, 0, 0, work.width, work.height);
+        preprocessToBW();
+
+        statusEl.textContent = "OCR...";
+        // OCR (whitelist brojeva pomaže)
+        const res = await worker.recognize(work, {
+          tessedit_char_whitelist: '0123456789',
         });
+
+        const text = (res && res.data && res.data.text) ? res.data.text : "";
+        rawEl.textContent = text || "—";
+
+        const parsed = parseSysDiaPulse(text);
+        parsedEl.textContent = JSON.stringify(parsed, null, 2);
+        statusEl.textContent = "ok";
+      } catch (e) {
+        statusEl.textContent = "error: " + (e?.message || e);
+      } finally {
+        busy = false;
+        requestAnimationFrame(ocrTick);
       }
+    }
 
-      // Stvori worker s letsgodigital modelom i progress loggerom
-      const worker = await window.Tesseract.createWorker('letsgodigital', 1, {
-        langPath: LETSGODIGITAL_URL,
-        logger: (m) => {
-          if (m.status === 'downloading letsgodigital' || m.status === 'loading language traineddata (from cache)') {
-            const pct = m.progress ? Math.round(m.progress * 100) : 0;
-            loadingText.textContent = 'Učitavam OCR model… ' + pct + '%';
-          } else if (m.status === 'initializing tesseract' || m.status === 'initializing api') {
-            loadingText.textContent = 'Inicijaliziram OCR…';
-          } else if (m.status === 'recognizing text') {
-            const pct = m.progress ? Math.round(m.progress * 100) : 0;
-            loadingText.textContent = 'Čitam brojke… ' + pct + '%';
-          }
-        },
-        errorHandler: (e) => console.warn('Tesseract:', e),
+    async function startCamera() {
+      if (running) return;
+      running = true;
+
+      // Kamera
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false
       });
+      video.srcObject = stream;
 
-      // Konfiguracija: samo brojke, jednoblok page-segmentation
-      await worker.setParameters({
-        tessedit_char_whitelist: '0123456789',
-        tessedit_pageseg_mode: '6', // PSM 6 — single uniform block of text
-        classify_bln_numeric_mode: '1',
-      });
+      await new Promise(resolve => video.onloadedmetadata = resolve);
 
-      tesseractWorker = worker;
-      return worker;
-    })();
+      // uskladi overlay s video elementom
+      drawOverlay();
 
-    return tesseractLoading;
-  }
+      await ensureWorker();
+      requestAnimationFrame(ocrTick);
+    }
 
-  // --- Preprocessing slike za 7-seg LCD ---
-  // Steps: grayscale → adaptivni threshold → invert ako su brojke svjetlije od pozadine
-  async function preprocessImage(file) {
-    const dataUrl = await readAsDataURL(file);
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        // Skaliranje: previše piksela = sporo, premalo = neuredno za OCR
-        const maxDim = 1600;
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          const ratio = Math.min(maxDim / width, maxDim / height);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
-        }
+    async function stopAll() {
+      running = false;
+      busy = false;
+      statusEl.textContent = "stopping...";
 
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
 
-        try {
-          const imageData = ctx.getImageData(0, 0, width, height);
-          const data = imageData.data;
-          const len = data.length;
+      if (worker) {
+        await worker.terminate();
+        worker = null;
+      }
+      statusEl.textContent = "stopped";
+    }
 
-          // 1. Grayscale + sakupi histogram za određivanje smjera
-          const gray = new Uint8Array(len / 4);
-          let sum = 0;
-          for (let i = 0, j = 0; i < len; i += 4, j++) {
-            const g = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-            gray[j] = g;
-            sum += g;
-          }
-          const mean = sum / gray.length;
-
-          // 2. Threshold (Otsu-style — koristimo srednju vrijednost kao approks.)
-          // Tesseract preferira tamna slova na bijeloj pozadini.
-          // Na Omronu su brojke tamne na svijetloj pozadini — odgovara default-u.
-          // No, ako je slikano kroz refleksiju ekrana, može varirati.
-          const threshold = mean;
-
-          // Detektiraj smjer: ako je više tamnih piksela od svijetlih u središtu,
-          // pretpostavi da su brojke tamnije.
-          let darkCount = 0, lightCount = 0;
-          const cx0 = Math.floor(width * 0.3), cx1 = Math.floor(width * 0.7);
-          const cy0 = Math.floor(height * 0.3), cy1 = Math.floor(height * 0.7);
-          for (let y = cy0; y < cy1; y++) {
-            for (let x = cx0; x < cx1; x++) {
-              const v = gray[y * width + x];
-              if (v < threshold) darkCount++; else lightCount++;
-            }
-          }
-          const numbersAreDark = darkCount < lightCount;
-
-          // 3. Apliciraj threshold + povećaj kontrast
-          for (let i = 0, j = 0; i < len; i += 4, j++) {
-            let v = gray[j];
-            // Pojačaj kontrast oko thresholda
-            if (numbersAreDark) {
-              v = v < threshold - 10 ? 0 : (v > threshold + 10 ? 255 : v);
-            } else {
-              // Invertirano — brojke su svjetlije
-              v = v > threshold + 10 ? 0 : (v < threshold - 10 ? 255 : 255 - v);
-            }
-            data[i] = data[i + 1] = data[i + 2] = v;
-          }
-          ctx.putImageData(imageData, 0, 0);
-        } catch (e) {
-          // Tainted canvas ili greška — preskoči preprocessing, šalji raw sliku
-        }
-
-        resolve(canvas);
-      };
-      img.onerror = () => reject(new Error('Slika se ne može učitati'));
-      img.src = dataUrl;
+    // ROI drag selekcija (povuci pravokutnik)
+    overlay.addEventListener('pointerdown', (ev) => {
+      dragging = true;
+      dragStart = { x: ev.offsetX, y: ev.offsetY };
+      roi.x = dragStart.x;
+      roi.y = dragStart.y;
+      roi.w = 10;
+      roi.h = 10;
+      clampRoi();
+      drawOverlay();
     });
-  }
 
-  // --- Heuristika za izvlačenje SYS/DIA/PULSE ---
-  function extractBPValues(lines) {
-    // Skupi sve brojeve s y-pozicijom i visinom
-    const numbers = [];
-    for (const line of lines) {
-      const text = line.text.replace(/\s+/g, ' ').trim();
-      const matches = [...text.matchAll(/\d{2,3}/g)];
-      for (const m of matches) {
-        const n = parseInt(m[0], 10);
-        if (n >= 30 && n <= 250) {
-          numbers.push({
-            value: n,
-            y: line.y,
-            height: line.height,
-          });
-        }
-      }
-    }
-
-    if (numbers.length === 0) return { sys: null, dia: null, pulse: null };
-
-    // Sortiraj po y-poziciji (odozgo prema dolje)
-    numbers.sort((a, b) => a.y - b.y);
-
-    let sys = null, dia = null, pulse = null;
-
-    // Strategija 1: tri najveće brojke po fontu, sortirano vertikalno
-    if (numbers.length >= 3) {
-      const byHeight = [...numbers].sort((a, b) => b.height - a.height);
-      const topThree = byHeight.slice(0, 3).sort((a, b) => a.y - b.y);
-      const [top, mid, bot] = topThree;
-
-      if (top && mid && bot &&
-          top.value >= 80 && top.value <= 250 &&
-          mid.value >= 40 && mid.value <= 140 &&
-          top.value > mid.value) {
-        sys = top.value;
-        dia = mid.value;
-        pulse = bot.value;
-      }
-    }
-
-    // Strategija 2: prva tri broja redoslijedom
-    if (sys === null && numbers.length >= 3) {
-      const [a, b, c] = numbers;
-      if (a.value > b.value && a.value >= 80) {
-        sys = a.value;
-        dia = b.value;
-        pulse = c.value;
-      }
-    }
-
-    // Strategija 3: ako imamo barem dva
-    if (sys === null && numbers.length >= 2) {
-      sys = numbers[0].value;
-      dia = numbers[1].value;
-      pulse = numbers[2]?.value ?? null;
-    }
-
-    // Validacija raspona
-    if (sys !== null && (sys < 70 || sys > 250)) sys = null;
-    if (dia !== null && (dia < 30 || dia > 150)) dia = null;
-    if (pulse !== null && (pulse < 30 || pulse > 200)) pulse = null;
-
-    // SYS mora biti veći od DIA
-    if (sys !== null && dia !== null && sys <= dia) {
-      [sys, dia] = [dia, sys];
-      if (sys <= dia) { sys = null; dia = null; }
-    }
-
-    return { sys, dia, pulse };
-  }
-
-  // --- Glavni OCR poziv ---
-  async function readValuesFromImage(file) {
-    loadingText.textContent = 'Pripremam sliku…';
-    loadingSub.classList.add('hidden');
-
-    const canvas = await preprocessImage(file);
-
-    if (!tesseractWorker) {
-      loadingText.textContent = 'Učitavam OCR model…';
-      loadingSub.classList.remove('hidden');
-    }
-
-    const worker = await loadTesseract();
-    loadingSub.classList.add('hidden');
-
-    const result = await worker.recognize(canvas);
-
-    // Pripremi liste s y-pozicijom
-    let lines = (result.data.lines || []).map(l => ({
-      text: l.text.trim(),
-      y: l.bbox?.y0 ?? 0,
-      height: (l.bbox?.y1 ?? 0) - (l.bbox?.y0 ?? 0),
-    })).filter(l => l.text);
-
-    if (lines.length === 0 && result.data.text) {
-      // Fallback — splittaj po newline
-      lines = result.data.text.split('\n')
-        .map((t, i) => ({ text: t.trim(), y: i * 100, height: 50 }))
-        .filter(l => l.text);
-    }
-
-    if (lines.length === 0) {
-      throw new Error('Tekst nije pronađen na slici');
-    }
-
-    return extractBPValues(lines);
-  }
-
-  function nowLocal() {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  function formatNice(isoLike) {
-    const d = new Date(isoLike);
-    const pad = (n) => String(n).padStart(2, '0');
-    const dni = ['ned', 'pon', 'uto', 'sri', 'čet', 'pet', 'sub'];
-    return `${dni[d.getDay()]}, ${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}. ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  function showToast(message) {
-    toastText.textContent = message;
-    toast.classList.add('shown');
-    setTimeout(() => toast.classList.remove('shown'), 2000);
-  }
-
-  // Vibracija ako je dostupna (haptic feedback)
-  function haptic(ms = 10) {
-    if (navigator.vibrate) navigator.vibrate(ms);
-  }
-
-  async function handleFile(file) {
-    if (!file) return;
-    lastFile = file;
-
-    resultCard.classList.remove('hidden');
-    loadingState.classList.remove('hidden');
-    errorState.classList.add('hidden');
-    valuesState.classList.add('hidden');
-
-    // Scroll do rezultata
-    setTimeout(() => {
-      resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 100);
-
-    try {
-      // Preview
-      const dataUrl = await readAsDataURL(file);
-      previewImg.src = dataUrl;
-      previewImg.classList.add('shown');
-      emptyState.classList.add('hidden');
-
-      const values = await readValuesFromImage(file);
-
-      loadingState.classList.add('hidden');
-      valuesState.classList.remove('hidden');
-
-      sysInput.value = values.sys ?? '';
-      diaInput.value = values.dia ?? '';
-      pulseInput.value = values.pulse ?? '';
-      datetimeInput.value = nowLocal();
-      updateCategory();
-
-      // Upozorenje ako neka vrijednost nije pročitana
-      const missing = [
-        values.sys === null ? 'SYS' : null,
-        values.dia === null ? 'DIA' : null,
-        values.pulse === null ? 'PULS' : null,
-      ].filter(Boolean);
-
-      if (missing.length > 0) {
-        showToast('Nedostaje: ' + missing.join(', ') + ' — unesi ručno');
-      } else {
-        showToast('Provjeri vrijednosti prije spremanja');
-      }
-
-      haptic(15);
-    } catch (err) {
-      loadingState.classList.add('hidden');
-      errorState.classList.remove('hidden');
-      errorText.textContent = 'Nisam uspio očitati: ' + err.message + '. Možeš unijeti ručno ispod.';
-
-      valuesState.classList.remove('hidden');
-      sysInput.value = '';
-      diaInput.value = '';
-      pulseInput.value = '';
-      datetimeInput.value = nowLocal();
-    }
-  }
-
-  cameraInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
-  galleryInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
-  retryBtn.addEventListener('click', () => {
-    if (lastFile) handleFile(lastFile);
-  });
-
-  // --- localStorage storage layer ---
-  const STORAGE_PREFIX = 'bp:';
-  const storage = {
-    list() {
-      const keys = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
-      }
-      return keys;
-    },
-    get(key) { return localStorage.getItem(key); },
-    set(key, value) { localStorage.setItem(key, value); },
-    delete(key) { localStorage.removeItem(key); }
-  };
-
-  function loadHistory() {
-    try {
-      const keys = storage.list();
-      const entries = [];
-      for (const key of keys) {
-        try {
-          const v = storage.get(key);
-          if (v) entries.push({ key, ...JSON.parse(v) });
-        } catch {}
-      }
-      entries.sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
-      renderHistory(entries);
-    } catch (err) {
-      renderHistory([]);
-    }
-  }
-
-  function renderHistory(entries) {
-    historyCount.textContent = entries.length;
-    if (entries.length === 0) {
-      historyList.innerHTML = '';
-      historyEmpty.classList.remove('hidden');
-      return;
-    }
-    historyEmpty.classList.add('hidden');
-    historyList.innerHTML = entries.map(e => {
-      const c = classify(e.sys, e.dia);
-      return `
-        <div class="history-item">
-          <div>
-            <div class="history-values">
-              <span class="h-main">${e.sys}/${e.dia}</span>
-              <span class="h-pulse">${e.pulse} bpm</span>
-              <span class="h-dot ${c.key}"></span>
-            </div>
-            <div class="h-date">${formatNice(e.datetime)}</div>
-          </div>
-          <button class="delete-btn" data-key="${e.key}" aria-label="Obriši">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-            </svg>
-          </button>
-        </div>
-      `;
-    }).join('');
-
-    historyList.querySelectorAll('.delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.key;
-        if (!confirm('Obrisati ovo mjerenje?')) return;
-        try {
-          storage.delete(key);
-          haptic(20);
-          loadHistory();
-        } catch {}
-      });
+    overlay.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      const x2 = ev.offsetX;
+      const y2 = ev.offsetY;
+      roi.w = x2 - dragStart.x;
+      roi.h = y2 - dragStart.y;
+      if (roi.w < 0) { roi.x = x2; roi.w = Math.abs(roi.w); }
+      if (roi.h < 0) { roi.y = y2; roi.h = Math.abs(roi.h); }
+      clampRoi();
+      drawOverlay();
     });
-  }
 
-  saveBtn.addEventListener('click', () => {
-    const sys = parseInt(sysInput.value, 10);
-    const dia = parseInt(diaInput.value, 10);
-    const pulse = parseInt(pulseInput.value, 10);
-    const datetime = datetimeInput.value;
+    overlay.addEventListener('pointerup', () => { dragging = false; dragStart = null; });
+    overlay.addEventListener('pointercancel', () => { dragging = false; dragStart = null; });
 
-    if (isNaN(sys) || isNaN(dia) || isNaN(pulse) || !datetime) {
-      showToast('Ispuni sve vrijednosti');
-      haptic(30);
-      return;
-    }
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopAll);
 
-    const key = STORAGE_PREFIX + new Date(datetime).getTime();
-    const entry = { sys, dia, pulse, datetime };
-
-    saveBtn.disabled = true;
-    saveBtn.querySelector('span').textContent = 'Spremam…';
-
-    try {
-      storage.set(key, JSON.stringify(entry));
-      haptic(15);
-      showToast('Spremljeno ✓');
-
-      setTimeout(() => {
-        saveBtn.disabled = false;
-        saveBtn.querySelector('span').textContent = 'Spremi mjerenje';
-        resultCard.classList.add('hidden');
-        previewImg.classList.remove('shown');
-        emptyState.classList.remove('hidden');
-        cameraInput.value = '';
-        galleryInput.value = '';
-        lastFile = null;
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 700);
-      loadHistory();
-    } catch (err) {
-      saveBtn.disabled = false;
-      saveBtn.querySelector('span').textContent = 'Spremi mjerenje';
-      showToast('Greška pri spremanju: ' + err.message);
-    }
-  });
-
-  loadHistory();
-</script>
-
+    // redraw overlay na resize
+    window.addEventListener('resize', drawOverlay);
+  </script>
 </body>
 </html>
