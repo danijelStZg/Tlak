@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="hr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Omron OCR FIX</title>
+
+<style>
+body { font-family: system-ui; padding: 10px; }
+video { width: min(420px, 92vw); border-radius:12px; background:black; }
+#wrap { position: relative; display:inline-block; }
+canvas { position:absolute; top:0; left:0; }
+pre { background:#f5f5f5; padding:10px; }
+</style>
+
+<script>
+var Module = {
+  locateFile: path => "https://cdn.jsdelivr.net/npm/opencv-wasm@4.3.0-10/" + path
+};
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/opencv-wasm@4.3.0-10/opencv.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+</head>
+
+<body>
+
+<h3>Omron OCR (FIXED)</h3>
+
+<button onclick="start()">Start</button>
+<button onclick="stop()">Stop</button>
+
+<br><br>
+
+<div id="wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<pre id="status">Klikni Start</pre>
+<pre id="result">---</pre>
+
+<script>
+
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+
+let stream = null;
+let worker = null;
+let running = false;
+
+//////////////////////////////////////////////////////
+// ✅ FIXED START — OVO JE KLJUČ
+//////////////////////////////////////////////////////
+async function start(){
+  if(running) return;
+
+  try{
+    statusEl.innerText = "Pokrećem...";
+
+    // ✅ pričekaj OpenCV
+    if (!window.cv || !cv.imread) {
+      statusEl.innerText = "Čekam OpenCV...";
+      await new Promise(res=>{
+        let t=setInterval(()=>{
+          if(window.cv && cv.imread){
+            clearInterval(t);
+            res();
+          }
+        },50);
+      });
+    }
+
+    // ✅ test kamera
+    const test = await navigator.mediaDevices.getUserMedia({video:true});
+    test.getTracks().forEach(t=>t.stop());
+
+    // ✅ prava kamera
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal:"environment"} },
+      audio:false
+    });
+
+    video.srcObject = stream;
+
+    // ✅ KLJUČNO: play()
+    await new Promise(res=>{
+      video.onloadedmetadata = ()=>{
+        video.play().then(res);
+      }
+    });
+
+    if(!video.videoWidth){
+      throw new Error("Video dimenzije 0");
+    }
+
+    overlay.width = video.clientWidth;
+    overlay.height = video.clientHeight;
+
+    // OCR worker
+    worker = await Tesseract.createWorker('eng');
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789'
+    });
+
+    running = true;
+    statusEl.innerText = "✅ Kamera radi";
+
+    loop();
+
+  }catch(e){
+    statusEl.innerText = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+//////////////////////////////////////////////////////
+// MAIN LOOP
+//////////////////////////////////////////////////////
+async function loop(){
+  if(!running) return;
+
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+
+  ctx.strokeStyle="red";
+  ctx.lineWidth=2;
+
+  ctx.strokeRect(80,60,200,150);
+
+  await simpleOCR();
+
+  setTimeout(loop,800);
+}
+
+//////////////////////////////////////////////////////
+// JEDNOSTAVNI OCR (TEST)
+//////////////////////////////////////////////////////
+async function simpleOCR(){
+
+  let canvas=document.createElement('canvas');
+  canvas.width=200;
+  canvas.height=150;
+
+  let c=canvas.getContext('2d');
+
+  c.drawImage(video,80,60,200,150,0,0,200,150);
+
+  let res = await worker.recognize(canvas);
+
+  let num = (res.data.text.match(/\d+/)||[])[0];
+
+  resultEl.innerText = "OCR: " + (num||"-");
+}
+
+//////////////////////////////////////////////////////
+// STOP
+//////////////////////////////////////////////////////
+function stop(){
+  running=false;
+
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+  }
+
+  if(worker){
+    worker.terminate();
+  }
+
+  statusEl.innerText="Stop";
+}
+
+</script>
+
+</body>
+</html>
+``
