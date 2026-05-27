@@ -1,16 +1,15 @@
-// Tlakomjer OCR v3.11 — Edge-line rotation detection
+// Tlakomjer OCR v3.12 — LCD-square crop after rotation
 // Sve nadogradnje od v3.1:
 //   v3.2 — detekcija "1", median-visina, vertikalni merge, pickBestDigits.
-//   v3.3 — LCD se detektira kao najveća tamna komponenta (kvadrat unutar kućišta).
-//   v3.4 — Bradley adaptive threshold + separabilan close (fix cross-hatched pozadine).
-//   v3.5 — template-matching scoring (LSQ) — fix sustavnog "8" bias-a.
+//   v3.3 — LCD se detektira kao najveća tamna komponenta.
+//   v3.4 — Bradley adaptive threshold + separabilan close.
+//   v3.5 — template-matching scoring (LSQ).
 //   v3.6 — auto-rotacija + live kamera.
-//   v3.7..v3.10 — razne iterativne ali nestabilne nadogradnje rotacije.
-//   v3.11 — POTPUNO NOVA rotacija: ne ovisi o LCD bbox-u nego o **horizontalnim
-//           rubovima**. Svi paralelni horizontalni rubovi tlakomjera (donji rub
-//           LCD-a, "Intelli sense" granica, START/STOP gornji rub, …) dijele isti
-//           kut nagiba. Algoritam: vertical gradient → edge map → projekcija u
-//           rotirani y → score = ∑ top-10 peakova → najbolji kut.
+//   v3.7..v3.10 — razne pokušaje rotacije.
+//   v3.11 — edge-line based rotation: kut koji poravnava sve horizontalne rubove.
+//   v3.12 — angle range proširen na ±45°. Dodano: nakon rotacije, traži LCD kao
+//           KVADRATNI blob u gornjoj polovici slike i krop-a samo njega.
+//           Time se eliminira "Intelli sense" labela koja je padala u screen-bbox.
 
 const imageInput        = document.getElementById('imageInput');
 const preview           = document.getElementById('preview');
@@ -36,7 +35,7 @@ const historyBody       = document.getElementById('historyBody');
 const exportBtn         = document.getElementById('exportBtn');
 const clearBtn          = document.getElementById('clearBtn');
 
-const STORAGE_KEY = 'tlakomjer-ocr-history-v3-11-edge-alignment';
+const STORAGE_KEY = 'tlakomjer-ocr-history-v3-12-lcd-square-crop';
 let currentImageBitmap = null;
 let lastAnalysis = null;
 
@@ -194,7 +193,7 @@ readingForm.addEventListener('submit', e => {
     timestamp: timestampEl.value,
     note: noteEl.value.trim(),
     createdAt: new Date().toISOString(),
-    source: lastAnalysis ? 'omron-precise-3.11' : 'manual'
+    source: lastAnalysis ? 'omron-precise-3.12' : 'manual'
   };
   if (!entry.sys || !entry.dia || !entry.pulse || !entry.timestamp) return alert('Ispuni SYS, DIA, puls i datum/vrijeme.');
   const items = getHistory();
@@ -269,11 +268,11 @@ function analyzeOmronPrecise(imageBitmap) {
   const initialRot = detectRotation(initialCtx, usedW, usedH);
   console.log(`[Rotation] initial detected: ${initialRot.angle.toFixed(2)}°`);
 
-  const ANGLE_MAX = 20;  // ne vjerujemo detektiranom kutu većem od 20°
+  const ANGLE_MAX = 45;  // v3.12: prošireno na ±45° za izrazitije nagibe
   const ANGLE_MIN = 0.5;
   if (Math.abs(initialRot.angle) >= ANGLE_MIN && Math.abs(initialRot.angle) <= ANGLE_MAX) {
     // Empirijski test smjera: malo rotiraj u + i u −, vidi koji smanji rezidual.
-    const testStep = Math.min(2, Math.abs(initialRot.angle));
+    const testStep = Math.min(3, Math.abs(initialRot.angle));
     let bestDir = 0, bestResidual = Math.abs(initialRot.angle);
     for (const dir of [1, -1]) {
       const candCanvas = rotateCanvas(workCanvas, dir * testStep);
@@ -291,8 +290,8 @@ function analyzeOmronPrecise(imageBitmap) {
     }
 
     if (bestDir !== 0) {
-      // Pravu rotaciju: |initialRot.angle| u smjeru bestDir, ograničeno na ±15°.
-      const finalAngle = bestDir * Math.min(15, Math.abs(initialRot.angle));
+      // Pravu rotaciju: |initialRot.angle| u smjeru bestDir, ograničeno na ±45°.
+      const finalAngle = bestDir * Math.min(45, Math.abs(initialRot.angle));
       console.log(`[Rotation] APPLY ${finalAngle.toFixed(2)}° (dir=${bestDir})`);
       const rotated = rotateCanvas(workCanvas, finalAngle);
       usedW = rotated.width; usedH = rotated.height;
@@ -310,17 +309,32 @@ function analyzeOmronPrecise(imageBitmap) {
     console.log(`[Rotation] |${initialRot.angle.toFixed(2)}°| below ${ANGLE_MIN}° threshold, skipping`);
   }
   const rotInfo = { angle: totalRotation, initialDetected: initialRot.angle };
-  // Sada radimo na (eventualno rotiranom) workCanvas-u
+
+  // v3.12: NAKON ROTACIJE — pronađi LCD kao KVADRAT u gornjoj polovici slike i crop-aj samo njega.
+  // Razlog: rotacija ravna sliku, ali screen-box detekcija može i dalje obuhvatiti
+  // "Intelli sense" labelu ili plastiku ispod LCD-a. Sad kad je slika ravna, LCD je
+  // jasno kvadratan blob u gornjoj polovici — krop-amo samo to područje prije autoScreenSearch.
   const ctxFinal = workCanvas.getContext('2d', { willReadFrequently: true });
-  let screen = autoScreenSearch(ctxFinal, usedW, usedH);
+  const lcdCrop = findSquareLcdCrop(ctxFinal, usedW, usedH);
+  if (lcdCrop) {
+    console.log(`[LCD-square] cropped to ${lcdCrop.x},${lcdCrop.y},${lcdCrop.w}x${lcdCrop.h}`);
+    // Kopiraj crop u workCanvas
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = lcdCrop.w; cropCanvas.height = lcdCrop.h;
+    cropCanvas.getContext('2d').drawImage(workCanvas, lcdCrop.x, lcdCrop.y, lcdCrop.w, lcdCrop.h, 0, 0, lcdCrop.w, lcdCrop.h);
+    workCanvas.width = lcdCrop.w; workCanvas.height = lcdCrop.h;
+    workCanvas.getContext('2d').drawImage(cropCanvas, 0, 0);
+    usedW = lcdCrop.w; usedH = lcdCrop.h;
+  }
+
+  // Sada radimo na (eventualno rotiranom i cropanom) workCanvas-u
+  const ctxAfter = workCanvas.getContext('2d', { willReadFrequently: true });
+  let screen = autoScreenSearch(ctxAfter, usedW, usedH);
 
   // v3.8: Stegni screen bbox po horizontalnoj i vertikalnoj projekciji.
-  // Razlog: ponekad LCD detektor obuhvati LCD + "Intelli sense" labelu ispod njega
-  // (jer su povezane crnom plastikom kućišta nakon spoja u jednu komponentu). To pomakne
-  // ROI-e za SYS/DIA/PULSE prema dolje pa PULSE pada na plastiku ispod LCD-a.
-  screen = trimBboxByDensity(ctxFinal, usedW, usedH, screen);
+  screen = trimBboxByDensity(ctxAfter, usedW, usedH, screen);
 
-  const raw = ctxFinal.getImageData(screen.x, screen.y, screen.w, screen.h);
+  const raw = ctxAfter.getImageData(screen.x, screen.y, screen.w, screen.h);
   const gray = toGray(raw);
 
   // v3.4: Bradley adaptive thresholding umjesto Otsu na local-normalized slici.
@@ -368,7 +382,7 @@ function analyzeOmronPrecise(imageBitmap) {
           confidence: Math.round(v.reading.confidence * 100) / 100
         })),
         final: finalReading,
-        note: 'v3.11: edge-line based rotation detection (all parallel horizontals share image tilt).'
+        note: 'v3.12: edge-line rotation up to ±45° + LCD-square crop after rotation.'
       }
     }
   };
@@ -386,6 +400,63 @@ function analyzeOmronPrecise(imageBitmap) {
 // Ova metoda je puno robusnija od stare scoring-based pretrage, jer ne ovisi o
 // fiksnim pretpostavljenim koordinatama OMRON-a — radi za bilo koju
 // rotaciju/skaliranje/kut snimke dok god je LCD vidljiv u kadru.
+
+// v3.12: Nakon rotacije, krop-aj sliku samo oko LCD-a (kvadratan blob u gornjoj
+// polovici nakon poravnanja). Razlog: rotacija ravna sliku, ali screen-box detekcija
+// može i dalje obuhvatiti "Intelli sense" labelu ili plastiku ispod LCD-a.
+// Pošto je slika sad ravna, LCD je jasno kvadratan blob — algoritam:
+//  1. Bradley adaptive + close → binary
+//  2. Connected components, filtrirati za "kvadratan" (asp 0.7-1.4) i u gornjoj polovici
+//  3. Najveći takav = LCD; vraćamo njegov bbox s malim padding-om
+//  4. Ako ničega nema, vrati null (kasniji algoritam će proći cijelu sliku)
+function findSquareLcdCrop(ctx, W, H) {
+  const full = ctx.getImageData(0, 0, W, H);
+  const gray = toGray(full);
+  const NEAR_BLACK = 25;
+  const masked = [];
+  for (let i = 0; i < gray.length; i++) if (gray[i] > NEAR_BLACK) masked.push(gray[i]);
+  if (masked.length < 1000) return null;
+  const thr = otsuThresholdArr(masked);
+  const bin = new Uint8Array(W * H);
+  for (let i = 0; i < gray.length; i++) {
+    bin[i] = (gray[i] < thr && gray[i] > NEAR_BLACK) ? 1 : 0;
+  }
+  const comps = connectedComponents(bin, W, H);
+  const totalArea = W * H;
+  let best = null, bestScore = -Infinity;
+  for (const c of comps) {
+    const bboxArea = c.w * c.h;
+    const af = bboxArea / totalArea;
+    if (af < 0.04 || af > 0.65) continue;
+    const aspect = c.w / c.h;
+    // KVADRAT (asp 0.7-1.4)
+    if (aspect < 0.70 || aspect > 1.40) continue;
+    const fill = c.area / bboxArea;
+    // Pravi LCD ima rupe od znamenki, fill 0.30-0.65
+    if (fill < 0.20 || fill > 0.75) continue;
+    // GORNJA POLOVICA slike — y centar < 60% slike
+    const yCenter = (c.y + c.h / 2) / H;
+    if (yCenter > 0.65) continue;
+    // Scoring
+    const squareness = 1 - Math.abs(1 - aspect);
+    const sizeScore = Math.min(1, af / 0.30);
+    let fillBonus = 0;
+    if (fill >= 0.30 && fill <= 0.65) fillBonus = 1.0;
+    else fillBonus = 0.3;
+    const upperBonus = (0.65 - yCenter) * 1.5;  // što gornji, bolji
+    const score = sizeScore * 1.2 + squareness * 0.8 + fillBonus + upperBonus;
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  if (!best) return null;
+  // Pad — proširi crop za ~5% prema svim stranama, ali ne preko ruba slike
+  const padX = Math.round(best.w * 0.05);
+  const padY = Math.round(best.h * 0.05);
+  const x = Math.max(0, best.x - padX);
+  const y = Math.max(0, best.y - padY);
+  const w = Math.min(W - x, best.w + 2 * padX);
+  const h = Math.min(H - y, best.h + 2 * padY);
+  return { x, y, w, h, score: bestScore, fill: best.area / (best.w * best.h), aspect: best.w / best.h };
+}
 
 function autoScreenSearch(ctx, W, H) {
   // Uzmi cijelu sliku u grayscale.
@@ -736,9 +807,15 @@ function detectRotation(ctx, W, H) {
     return total;
   }
 
-  // Grubi skenir s korakom 0.5°
+  // Grubi skenir s korakom 1° preko [-45, +45] (umjesto [-15, +15]).
+  // Proširen raspon hvata izrazito nakošene slike (npr. dijagonalno snimanje).
   let bestTheta = 0, bestScore = 0;
-  for (let theta = -15; theta <= 15; theta += 0.5) {
+  for (let theta = -45; theta <= 45; theta += 1) {
+    const s = projectAndScore(theta);
+    if (s > bestScore) { bestScore = s; bestTheta = theta; }
+  }
+  // Srednji refine s korakom 0.25° unutar ±1° od najboljeg
+  for (let theta = bestTheta - 1; theta <= bestTheta + 1; theta += 0.25) {
     const s = projectAndScore(theta);
     if (s > bestScore) { bestScore = s; bestTheta = theta; }
   }

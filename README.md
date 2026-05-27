@@ -1,85 +1,67 @@
-# Tlakomjer OCR — OMRON Precise 3.11
+# Tlakomjer OCR — OMRON Precise 3.12
 
-Nadogradnja v3.10 → v3.11. **Potpuno novi pristup detekciji kuta rotacije**, na
-prijedlog korisnika: "neka donji rub LCD-a bude poravnat vodoravno".
+Nadogradnja v3.11 → v3.12. Dvije ciljane popravke:
 
-## Osnovna ideja
+## 1. Detekcija kuta proširena na ±45°
 
-Tlakomjer ima više **paralelnih horizontalnih rubova**: donji rub LCD-a, "Intelli
-sense" granica, START/STOP gornji rub, itd. **Svi dijele isti kut nagiba slike.**
+V3.11 je tražila kut samo u rasponu [-15°, +15°]. Ako je tlakomjer snimljen
+izrazito ukoso (npr. korisnik telefon drži pod kutom), korekcija nije
+moguća jer pravi kut nije unutar pretrage.
 
-Algoritam ne traži pojedinačnu liniju ili komponentu — traži **kut θ koji
-istovremeno poravnava sve te rubove u savršeno vodoravne pruge**.
+Sad: **[-45°, +45°]** s 1° grubim korakom + 0.25° finim. Plus, `ANGLE_MAX` u
+analizi (gornji safety cap) podignut s 20° na 45°.
 
-## Algoritam u 4 koraka
+## 2. NAKON ROTACIJE — LCD-square crop
 
-1. **Vertical gradient** preko cijele slike: `grad[y,x] = g[y+1,x] − g[y−1,x]`.
-   Izolira **horizontalne** rubove (gdje sivilo skokovito mijenja gore→dolje).
+Ovo je **najvažnija promjena**. Algoritam:
 
-2. **Edge mask**: `|grad| > mean + 1·std` (sve "značajne" rubne piksele).
+1. Rotacija ravna sliku (v3.11 + rotation pipeline iz v3.10).
+2. **`findSquareLcdCrop`** nakon rotacije: traži povezanu komponentu koja je:
+   - **Kvadratasta** (aspect 0.70–1.40)
+   - Pokriva 4–65% slike
+   - **Fill ratio 0.20–0.75** (LCD ima rupe od znamenki — to ga razlikuje od solidnih plastika)
+   - **Gornja polovica slike** (y centra < 65% slike, jer LCD je iznad gumba)
+3. Najbolji takav kandidat = LCD, **s padding-om 5%** oko bbox-a.
+4. Sve dalje (autoScreenSearch, ROI-i SYS/DIA/PULSE, digit recognition) radi
+   se **samo unutar tog kropa**.
 
-3. **Angle scan** [-15°, +15°] (gruba 0.5°, fina 0.1°): za svaki kut θ,
-   projektiraj edge piksele u **rotirani y**:
-   ```
-   y' = -(x - cx)·sin(θ) + (y - cy)·cos(θ)
-   ```
-   Izgradi histogram po y'. **Score(θ) = ∑ top-10 lokalnih peakova** u histogramu.
-
-4. **θ s najvećim score-om** = pravi kut nagiba slike.
-
-## Zašto ovo radi
-
-Kad je θ ispravan, **svi paralelni horizontalni rubovi** postaju savršeno
-vodoravne pruge u rotiranom prostoru — što znači da svi pikseli istog ruba
-imaju **isti y'**. Histogram po y' onda ima **mnogo visokih peakova** (jedan po
-liniji). Score zbroji top-10 najjačih peakova.
-
-Kad je θ kriv, isti rubovi su raspršeni preko više y' vrijednosti, peakovi su
-niski, score je nizak.
+Time se trajno rješavaju problemi gdje je screen-box "iscurio" prema dolje
+preko "Intelli sense" labele i plastike kućišta.
 
 ## Verifikacija u Pythonu
 
-Testirano na pravoj OMRON fotografiji s nametnutim rotacijama:
+Na uspravnoj OMRON slici (952×1693), LCD-square crop daje bbox
+**(7, 259, 781×743)** s asp=1.05, fill=0.42 — točno LCD ploha bez plastike.
 
-| Nametnuti kut (PIL.rotate) | Detektirano | Rezidual nakon PIL.rotate(+detected) |
-|---------------------------|-------------|--------------------------------------|
-| −15°                      | +15.0°      | +1.0°                                |
-| −10°                      | +11.0°      | 0.0°                                 |
-| −5°                       | +6.0°       | 0.0°                                 |
-| 0°                        | +1.0°       | 0.0°                                 |
-| +5°                       | −4.0°       | 0.0°                                 |
-| +10°                      | −9.0°       | −1.0°                                |
-| +15°                      | −15.0°      | 0.0°                                 |
+S padding-om 5%: **(0, 222, 859×817)** — i dalje ne uključuje "Intelli sense"
+labelu (koja počinje na y≈1010).
 
-Greška < 1° u svim slučajevima.
+## Sve ostalo iz v3.11 ostaje
 
-## Sve ostalo iz v3.10 ostaje
-
-- **Empirijski test smjera** (rotiraj testno za malo, izaberi smjer koji smanji rezidual).
-- **±15° hard cap** na finalni kut.
-- **Aspect-cap trim** (ako je bbox h > 1.10×w, sileđe stegni na kvadrat).
-- **Density-based trim** unutar bbox-a.
-- **Bradley adaptive thresholding** + sva digit recognition logika.
-- **Live kamera**.
+- Edge-line based detekcija kuta (vertikalni gradient + projekcija edge piksela
+  u rotirani y + scoring sum top-10 peakova).
+- Empirijski test smjera rotacije.
+- Bradley adaptive thresholding + template-matching scoring.
+- Live kamera.
 
 ## Cache
 
-Service worker key podignut na `v3-11`.
+Service worker key podignut na `v3-12`.
 
-## Test
+## Console.log u DevTools
 
-Otvori DevTools Console (F12) i klikni "Precizni OMRON parser". Vidiš:
+Sad vidiš tijek:
 
 ```
 [Rotation] edge-line detection: angle=11.00°, score=4051, edges=18432, working 600x1066
 [Rotation] initial detected: 11.00°
-[Rotation] test 2.00° → residual 13.50° (|13.50|)
-[Rotation] test -2.00° → residual 9.00° (|9.00|)
-[Rotation] APPLY -11.00° (dir=-1)
-[LCD detect] ...
+[Rotation] test 3.00° → residual 8.00° (|8.00|)
+[Rotation] test -3.00° → residual 13.00° (|13.00|)
+[Rotation] APPLY 11.00° (dir=1)
+[LCD-square] cropped to 0,222,859x817
+[LCD detect] thr=131, 1 candidates: [...]
 [Trim] ...
 ```
 
-Score (sad u logu) i broj edge piksela su vrlo dobri dijagnostički podatci —
-ako je score nizak, slika nema dovoljno jakih horizontalnih rubova
-(npr. potpuno bez kontrasta) i algoritam preskoči rotaciju.
+Ako "LCD-square" ne radi (`no LCD-square candidate`), algoritam i dalje koristi
+sve postojeće mehanizme (autoScreenSearch + trim) na cijeloj slici.
