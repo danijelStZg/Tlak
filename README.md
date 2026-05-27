@@ -1,67 +1,103 @@
-# Tlakomjer OCR — OMRON Precise 3.12
+# Tlakomjer v4.0 — Mobile PWA
 
-Nadogradnja v3.11 → v3.12. Dvije ciljane popravke:
+Mobile-first verzija aplikacije za praćenje krvnog tlaka. Sav OCR engine iz v3.12
+ostaje netaknut, ali UI je potpuno prepisan za korištenje na mobitelu kao
+**Progressive Web App** (offline-capable, instalabilna na home screen).
 
-## 1. Detekcija kuta proširena na ±45°
+## Funkcionalnosti
 
-V3.11 je tražila kut samo u rasponu [-15°, +15°]. Ako je tlakomjer snimljen
-izrazito ukoso (npr. korisnik telefon drži pod kutom), korekcija nije
-moguća jer pravi kut nije unutar pretrage.
+### Glavni ekran
+- **Lista mjerenja**, kronološki, grupiraj po danu ("Danas", "Jučer", datum)
+- **Statistike** na vrhu: prosjek SYS/DIA, broj mjerenja, posljednje
+- **Color-coded vrijednosti**: SYS crveno, DIA zeleno, PULS plavo
+- **Veliki FAB gumb "📷 Snimi"** za automatsko očitanje kamerom
+- **Mali FAB "✏️"** za ručni unos
+- **Izvor mjerenja** (📷 ikona ako je iz kamere, prazno ako ručno)
 
-Sad: **[-45°, +45°]** s 1° grubim korakom + 0.25° finim. Plus, `ANGLE_MAX` u
-analizi (gornji safety cap) podignut s 20° na 45°.
+### Snimanje kamerom
+- Live preview u fullscreen-u s **vodilicom za frejmanje** LCD-a
+- Tap "snap" gumb → analiza (1-2s) → **rezultat overlay** s SYS/DIA/PULS
+- **Pouzdanost** prikazana kao postotak (zelena badge ≥70%, crvena <70%)
+- Korisnik može **urediti** brojeve prije spremanja (ako algoritam pogriješi)
+- "Ponovo" za retry, "Spremi" za pohranu
+- "🔄" gumb za flip između front/back kamere
+- **Slika se nigdje ne sprema** — direktno iz video frame-a u canvas u analizu
 
-## 2. NAKON ROTACIJE — LCD-square crop
+### Ručni unos
+- SYS / DIA / PULS / datum-vrijeme / napomena
+- Edit gumb na svakom postojećem mjerenju u listi
+- Validacija (sva tri broja obavezna)
 
-Ovo je **najvažnija promjena**. Algoritam:
+### Izbornik (⋮)
+- 📤 **Izvoz u CSV** (svi povijesni podaci)
+- 🗑 **Obriši sve** (s potvrdom)
+- 🔧 **Dijagnostika** (zadnja analiza — original, procesirano, JSON)
 
-1. Rotacija ravna sliku (v3.11 + rotation pipeline iz v3.10).
-2. **`findSquareLcdCrop`** nakon rotacije: traži povezanu komponentu koja je:
-   - **Kvadratasta** (aspect 0.70–1.40)
-   - Pokriva 4–65% slike
-   - **Fill ratio 0.20–0.75** (LCD ima rupe od znamenki — to ga razlikuje od solidnih plastika)
-   - **Gornja polovica slike** (y centra < 65% slike, jer LCD je iznad gumba)
-3. Najbolji takav kandidat = LCD, **s padding-om 5%** oko bbox-a.
-4. Sve dalje (autoScreenSearch, ROI-i SYS/DIA/PULSE, digit recognition) radi
-   se **samo unutar tog kropa**.
+## PWA značajke
 
-Time se trajno rješavaju problemi gdje je screen-box "iscurio" prema dolje
-preko "Intelli sense" labele i plastike kućišta.
+- **Offline** — service worker cache-ira sve fajlove (app.js, style.css, ikone)
+- **Instalabilna** — "Add to Home Screen" u browseru daje icon na home screen
+- **Standalone display mode** — bez browser UI-ja, izgleda kao native app
+- **Portrait orientation lock**
+- **Theme color** se prilagođava status bar-u (#0f172a)
+- **Safe area insets** — radi na iPhone-ima s notch-em
+- **Pravo touch-friendly** — gumbi 44+ px, no-zoom inputs (font-size 16px)
 
-## Verifikacija u Pythonu
+## Tehnički detalji
 
-Na uspravnoj OMRON slici (952×1693), LCD-square crop daje bbox
-**(7, 259, 781×743)** s asp=1.05, fill=0.42 — točno LCD ploha bez plastike.
+- LocalStorage za perzistenciju (`tlakomjer-history-v4-0` key)
+- Service Worker v4-0 — network-first za HTML, cache-first za assets
+- Manifest za installability
+- Tesseract.js učitava se s CDN-a (lazy — koristi se samo kao fallback)
+- Sva OCR logika offline jer je u app.js (Bradley adaptive + template matching)
 
-S padding-om 5%: **(0, 222, 859×817)** — i dalje ne uključuje "Intelli sense"
-labelu (koja počinje na y≈1010).
+## Storage format
 
-## Sve ostalo iz v3.11 ostaje
-
-- Edge-line based detekcija kuta (vertikalni gradient + projekcija edge piksela
-  u rotirani y + scoring sum top-10 peakova).
-- Empirijski test smjera rotacije.
-- Bradley adaptive thresholding + template-matching scoring.
-- Live kamera.
-
-## Cache
-
-Service worker key podignut na `v3-12`.
-
-## Console.log u DevTools
-
-Sad vidiš tijek:
-
+```js
+{
+  id: "uuid",
+  sys: 113, dia: 82, pulse: 54,
+  timestamp: "2025-05-27T07:55:00.000Z",
+  createdAt: "2025-05-27T07:56:23.123Z",
+  source: "omron-precise-4.0",  // ili "manual" / "edited"
+  confidence: 0.94,
+  note: "opcionalna napomena"
+}
 ```
-[Rotation] edge-line detection: angle=11.00°, score=4051, edges=18432, working 600x1066
-[Rotation] initial detected: 11.00°
-[Rotation] test 3.00° → residual 8.00° (|8.00|)
-[Rotation] test -3.00° → residual 13.00° (|13.00|)
-[Rotation] APPLY 11.00° (dir=1)
-[LCD-square] cropped to 0,222,859x817
-[LCD detect] thr=131, 1 candidates: [...]
-[Trim] ...
+
+## Deploy
+
+PWA traži HTTPS (osim za localhost). Opcije:
+- **GitHub Pages** — push u repo, omogući Pages, automatski HTTPS
+- **Netlify / Vercel** — drag-drop folder, dobiješ HTTPS URL
+- **Cloudflare Pages** — slično
+
+## Test lokalno
+
+```bash
+cd tlakomjer_app_v4_0_mobile
+python3 -m http.server 8000
+# Otvori http://localhost:8000 u Chrome/Safari na mobitelu
+# (mora biti localhost; getUserMedia neće raditi preko file://)
 ```
 
-Ako "LCD-square" ne radi (`no LCD-square candidate`), algoritam i dalje koristi
-sve postojeće mehanizme (autoScreenSearch + trim) na cijeloj slici.
+Za testing s mobitelom u istoj WiFi mreži:
+```bash
+# Generiraj self-signed cert
+openssl req -x509 -newkey rsa:4096 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=localhost"
+# Pokreni HTTPS server
+python3 -c "import http.server, ssl; s=http.server.HTTPServer(('0.0.0.0',8443),http.server.SimpleHTTPRequestHandler); ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain('cert.pem','key.pem'); s.socket=ctx.wrap_socket(s.socket,server_side=True); s.serve_forever()"
+# Otvori https://<IP-tvog-laptopa>:8443
+# (prihvati certifikat upozorenje)
+```
+
+## Sve od OCR pipelinea (v3.12)
+
+- Edge-line based detekcija kuta rotacije (±45°)
+- Empirijski test smjera rotacije
+- LCD-square crop nakon rotacije (uklanja "Intelli sense" labelu)
+- Bradley adaptive thresholding
+- Morfološki close + ensemble glasovanje preko 5 varijanti
+- Template-matching scoring za sedmosegmentno prepoznavanje
+- Detekcija znamenke "1" kao posebnog slučaja
+- Console.log dijagnostika u DevTools

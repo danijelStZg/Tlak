@@ -1,238 +1,505 @@
-// Tlakomjer OCR v3.12 — LCD-square crop after rotation
-// Sve nadogradnje od v3.1:
-//   v3.2 — detekcija "1", median-visina, vertikalni merge, pickBestDigits.
-//   v3.3 — LCD se detektira kao najveća tamna komponenta.
-//   v3.4 — Bradley adaptive threshold + separabilan close.
-//   v3.5 — template-matching scoring (LSQ).
-//   v3.6 — auto-rotacija + live kamera.
-//   v3.7..v3.10 — razne pokušaje rotacije.
-//   v3.11 — edge-line based rotation: kut koji poravnava sve horizontalne rubove.
-//   v3.12 — angle range proširen na ±45°. Dodano: nakon rotacije, traži LCD kao
-//           KVADRATNI blob u gornjoj polovici slike i krop-a samo njega.
-//           Time se eliminira "Intelli sense" labela koja je padala u screen-bbox.
-
-const imageInput        = document.getElementById('imageInput');
-const preview           = document.getElementById('preview');
-const processedPreview  = document.getElementById('processedPreview');
-const workCanvas        = document.getElementById('workCanvas');
-const preciseBtn        = document.getElementById('preciseBtn');
-const ocrBtn            = document.getElementById('ocrBtn');
-const demoBtn           = document.getElementById('demoBtn');
-const cameraBtn         = document.getElementById('cameraBtn');
-const cameraModal       = document.getElementById('cameraModal');
-const cameraVideo       = document.getElementById('cameraVideo');
-const cameraSnapBtn     = document.getElementById('cameraSnapBtn');
-const cameraCancelBtn   = document.getElementById('cameraCancelBtn');
-const statusEl          = document.getElementById('status');
-const diagTextEl        = document.getElementById('diagText');
-const sysEl             = document.getElementById('sys');
-const diaEl             = document.getElementById('dia');
-const pulseEl           = document.getElementById('pulse');
-const timestampEl       = document.getElementById('timestamp');
-const noteEl            = document.getElementById('note');
-const readingForm       = document.getElementById('readingForm');
-const historyBody       = document.getElementById('historyBody');
-const exportBtn         = document.getElementById('exportBtn');
-const clearBtn          = document.getElementById('clearBtn');
-
-const STORAGE_KEY = 'tlakomjer-ocr-history-v3-12-lcd-square-crop';
-let currentImageBitmap = null;
-let lastAnalysis = null;
-
-setDefaultTimestamp();
-renderHistory();
-registerSW();
-
-imageInput.addEventListener('change', async e => {
-  const f = e.target.files?.[0];
-  if (f) await loadImageFile(f);
-});
-
-demoBtn.addEventListener('click', async () => {
-  const res = await fetch('./assets/omron-demo.jpg');
-  const blob = await res.blob();
-  await loadImageFile(new File([blob], 'omron-demo.jpg', { type: blob.type || 'image/jpeg' }));
-});
+// Tlakomjer OCR v4.0 — Mobile-first PWA
+// UI layer + complete OCR pipeline iz v3.12
 
 // ============================================================
-//                    LIVE KAMERA (getUserMedia)
+//                  DOM ELEMENTI
 // ============================================================
+const $ = id => document.getElementById(id);
+
+// Ekrani
+const screenHome   = $('screenHome');
+const screenCamera = $('screenCamera');
+const screenManual = $('screenManual');
+
+// Home
+const captureBtn  = $('captureBtn');
+const manualBtn   = $('manualBtn');
+const menuBtn     = $('menuBtn');
+const historyList = $('historyList');
+const emptyState  = $('emptyState');
+const statsBar    = $('statsBar');
+const statAvg     = $('statAvg');
+const statCount   = $('statCount');
+const statLast    = $('statLast');
+
+// Kamera
+const cameraVideo     = $('cameraVideo');
+const captureCanvas   = $('captureCanvas');
+const workCanvas      = $('workCanvas');
+const cameraCloseBtn  = $('cameraCloseBtn');
+const cameraFlipBtn   = $('cameraFlipBtn');
+const snapBtn         = $('snapBtn');
+const captureGuide    = $('captureGuide');
+const analyzingOverlay= $('analyzingOverlay');
+const resultOverlay   = $('resultOverlay');
+const resultSys       = $('resultSys');
+const resultDia       = $('resultDia');
+const resultPulse     = $('resultPulse');
+const resultConfidence= $('resultConfidence');
+const resultRetryBtn  = $('resultRetryBtn');
+const resultSaveBtn   = $('resultSaveBtn');
+
+// Manual unos
+const manualBackBtn  = $('manualBackBtn');
+const manualTitle    = $('manualTitle');
+const manualSys      = $('manualSys');
+const manualDia      = $('manualDia');
+const manualPulse    = $('manualPulse');
+const manualTime     = $('manualTime');
+const manualNote     = $('manualNote');
+const manualSaveBtn  = $('manualSaveBtn');
+
+// Menu / Dijagnostika
+const menuOverlay    = $('menuOverlay');
+const menuCloseBtn   = $('menuCloseBtn');
+const menuExportBtn  = $('menuExportBtn');
+const menuClearBtn   = $('menuClearBtn');
+const menuDiagBtn    = $('menuDiagBtn');
+const diagModal      = $('diagModal');
+const diagCloseBtn   = $('diagCloseBtn');
+const diagOrigImg    = $('diagOrigImg');
+const diagProcImg    = $('diagProcImg');
+const diagJsonText   = $('diagJsonText');
+
+// Toast
+const toast = $('toast');
+
+// ============================================================
+//                  STATE
+// ============================================================
+const STORAGE_KEY = 'tlakomjer-history-v4-0';
 let cameraStream = null;
+let currentFacing = 'environment';
+let lastAnalysis = null;
+let lastSnapBitmap = null;
+let editingId = null;  // ako uređujemo postojeći entry
 
-cameraBtn.addEventListener('click', async () => {
+// ============================================================
+//                  EKRAN MANAGEMENT
+// ============================================================
+function showScreen(which) {
+  screenHome.hidden = which !== 'home';
+  screenCamera.hidden = which !== 'camera';
+  screenManual.hidden = which !== 'manual';
+  // Ako napustimo kameru, ugasi je
+  if (which !== 'camera' && cameraStream) {
+    stopCamera();
+  }
+}
+
+// ============================================================
+//                  TOAST
+// ============================================================
+let toastTimer = null;
+function showToast(msg, type = '') {
+  toast.textContent = msg;
+  toast.className = 'toast' + (type ? ' ' + type : '');
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 2500);
+}
+
+// ============================================================
+//                  POVIJEST — STORAGE
+// ============================================================
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveHistory(items) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+}
+function addEntry(entry) {
+  const items = getHistory();
+  items.unshift(entry);
+  saveHistory(items);
+  renderHistory();
+}
+function updateEntry(id, patch) {
+  const items = getHistory();
+  const idx = items.findIndex(x => x.id === id);
+  if (idx >= 0) {
+    items[idx] = { ...items[idx], ...patch };
+    saveHistory(items);
+    renderHistory();
+  }
+}
+function deleteEntry(id) {
+  saveHistory(getHistory().filter(x => x.id !== id));
+  renderHistory();
+}
+
+// ============================================================
+//                  POVIJEST — RENDER
+// ============================================================
+function renderHistory() {
+  const items = getHistory();
+  // Sortiraj po timestamp DESC
+  items.sort((a, b) => (b.timestamp || b.createdAt).localeCompare(a.timestamp || a.createdAt));
+
+  if (!items.length) {
+    historyList.innerHTML = '';
+    historyList.appendChild(emptyState);
+    statsBar.hidden = true;
+    return;
+  }
+
+  statsBar.hidden = false;
+  const avgSys = Math.round(items.reduce((s,i) => s+(+i.sys||0), 0) / items.length);
+  const avgDia = Math.round(items.reduce((s,i) => s+(+i.dia||0), 0) / items.length);
+  statAvg.textContent = `${avgSys}/${avgDia}`;
+  statCount.textContent = items.length;
+  statLast.textContent = items[0] ? `${items[0].sys}/${items[0].dia}` : '—';
+
+  // Grupiraj po danu
+  const groups = new Map();
+  for (const it of items) {
+    const day = (it.timestamp || it.createdAt).slice(0, 10);
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day).push(it);
+  }
+
+  historyList.innerHTML = '';
+  for (const [day, entries] of groups) {
+    const hdr = document.createElement('div');
+    hdr.className = 'history-day-header';
+    hdr.textContent = formatDay(day);
+    historyList.appendChild(hdr);
+
+    for (const e of entries) {
+      const card = document.createElement('div');
+      card.className = 'history-item';
+      const isCam = e.source && e.source.includes('omron');
+      card.innerHTML = `
+        <div class="history-item-time">
+          <span class="${isCam ? 'history-item-source-cam' : ''}">${formatTime(e.timestamp || e.createdAt)}</span>
+        </div>
+        <div class="history-item-values">
+          <div class="history-val"><span class="history-val-label">SYS</span><span class="history-val-num sys">${e.sys}</span></div>
+          <div class="history-val"><span class="history-val-label">DIA</span><span class="history-val-num dia">${e.dia}</span></div>
+          <div class="history-val"><span class="history-val-label">Puls</span><span class="history-val-num pulse">${e.pulse}</span></div>
+        </div>
+        <div class="history-item-actions">
+          <button class="edit-btn" data-id="${e.id}">Uredi</button>
+          <button class="del-btn" data-id="${e.id}">×</button>
+        </div>
+        ${e.note ? `<div class="history-item-note">${escapeHtml(e.note)}</div>` : ''}
+      `;
+      historyList.appendChild(card);
+    }
+  }
+
+  historyList.querySelectorAll('.del-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      if (confirm('Obriši mjerenje?')) deleteEntry(b.dataset.id);
+    });
+  });
+  historyList.querySelectorAll('.edit-btn').forEach(b => {
+    b.addEventListener('click', () => openManualEdit(b.dataset.id));
+  });
+}
+
+function formatDay(yyyymmdd) {
+  const d = new Date(yyyymmdd);
+  const today = new Date();
+  const yest = new Date(); yest.setDate(yest.getDate() - 1);
+  const sameDate = (a, b) => a.toISOString().slice(0,10) === b.toISOString().slice(0,10);
+  if (sameDate(d, today)) return 'Danas';
+  if (sameDate(d, yest)) return 'Jučer';
+  return new Intl.DateTimeFormat('hr-HR', { weekday: 'short', day: 'numeric', month: 'short' }).format(d);
+}
+function formatTime(iso) {
+  return new Intl.DateTimeFormat('hr-HR', { hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+
+// ============================================================
+//                  KAMERA
+// ============================================================
+async function startCamera() {
+  if (cameraStream) return;
   if (!navigator.mediaDevices?.getUserMedia) {
-    return alert('Tvoj browser ne podržava live kameru. Koristi datoteku iznad.');
+    showToast('Kamera nije podržana', 'error');
+    showScreen('home');
+    return;
   }
   try {
-    setStatus('Otvaram kameru…', 'info');
     cameraStream = await navigator.mediaDevices.getUserMedia({
       video: {
-        facingMode: { ideal: 'environment' },  // stražnja kamera ako postoji
+        facingMode: { ideal: currentFacing },
         width:  { ideal: 1920 },
         height: { ideal: 1080 }
       },
       audio: false
     });
     cameraVideo.srcObject = cameraStream;
-    cameraModal.hidden = false;
-    setStatus('Kamera otvorena. Uokviri tlakomjer i stisni Uslikaj.', 'info');
+    await cameraVideo.play();
   } catch (err) {
     console.error(err);
-    alert('Ne mogu otvoriti kameru: ' + (err.message || err));
-    setStatus('Kamera odbijena ili nedostupna.', 'error');
+    showToast('Kamera nije dostupna: ' + (err.message || err), 'error');
+    showScreen('home');
   }
-});
-
-cameraCancelBtn.addEventListener('click', () => closeCamera());
-
-cameraSnapBtn.addEventListener('click', async () => {
-  if (!cameraStream || !cameraVideo.videoWidth) return;
-  // Snimi current frame u offscreen canvas (NIKAD ne ide na disk).
-  const vw = cameraVideo.videoWidth, vh = cameraVideo.videoHeight;
-  const snap = document.createElement('canvas');
-  snap.width = vw; snap.height = vh;
-  snap.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
-  // Konvertiraj u ImageBitmap direktno iz canvasa (bez Blob/Filea).
-  closeCamera();
-  try {
-    const bmp = await createImageBitmap(snap);
-    // Mali "preview" prikaz — koristimo data URL iz canvasa.
-    preview.src = snap.toDataURL('image/jpeg', 0.9);
-    preview.hidden = false;
-    processedPreview.hidden = true;
-    currentImageBitmap = bmp;
-    lastAnalysis = null;
-    setStatus('Slika snimljena. Klikni "Precizni OMRON parser".', 'success');
-  } catch (err) {
-    console.error(err);
-    setStatus('Greška pri uzimanju frame-a: ' + err.message, 'error');
-  }
-});
-
-function closeCamera() {
+}
+function stopCamera() {
   if (cameraStream) {
-    for (const track of cameraStream.getTracks()) track.stop();
+    cameraStream.getTracks().forEach(t => t.stop());
     cameraStream = null;
   }
   cameraVideo.srcObject = null;
-  cameraModal.hidden = true;
+}
+async function flipCamera() {
+  currentFacing = currentFacing === 'environment' ? 'user' : 'environment';
+  stopCamera();
+  await startCamera();
 }
 
-// Zatvori kameru ako korisnik napusti tab.
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden && cameraStream) closeCamera();
-});
+// Snimanje frame-a
+async function captureFrame() {
+  if (!cameraStream || !cameraVideo.videoWidth) return null;
+  const vw = cameraVideo.videoWidth, vh = cameraVideo.videoHeight;
+  captureCanvas.width = vw; captureCanvas.height = vh;
+  captureCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
+  return await createImageBitmap(captureCanvas);
+}
 
-preciseBtn.addEventListener('click', async () => {
-  if (!currentImageBitmap) return alert('Prvo učitaj fotografiju.');
+// Glavni snap → analyze → show result
+async function onSnap() {
+  // Sakrij guide, prikaži analizu
+  captureGuide.hidden = true;
+  analyzingOverlay.hidden = false;
   try {
-    setStatus('Pokrećem precizni OMRON parser…', 'info');
-    const analysis = analyzeOmronPrecise(currentImageBitmap);
+    const bmp = await captureFrame();
+    if (!bmp) { showToast('Greška pri snimanju', 'error'); return; }
+    lastSnapBitmap = bmp;
+    // Pauziraj video da slika "zamrznuta" stoji
+    cameraVideo.pause();
+    // Analiza (može potrajati 1-2s)
+    await new Promise(r => setTimeout(r, 50));  // pusti UI da renderira
+    const analysis = analyzeOmronPrecise(bmp);
     lastAnalysis = analysis;
-    processedPreview.src = analysis.debug.previewDataUrl;
-    processedPreview.hidden = false;
-    if (analysis.reading.sys)   sysEl.value   = analysis.reading.sys;
-    if (analysis.reading.dia)   diaEl.value   = analysis.reading.dia;
-    if (analysis.reading.pulse) pulseEl.value = analysis.reading.pulse;
-    if (analysis.reading.time) applyDetectedTime(analysis.reading.time);
-    diagTextEl.textContent = JSON.stringify(analysis.debug.report, null, 2);
-    const found = [analysis.reading.sys, analysis.reading.dia, analysis.reading.pulse].filter(Boolean).length;
-    setStatus(
-      found >= 2
-        ? `Parser gotov. Pronađeno ${found}/3 polja. Pouzdanost ${Math.round(analysis.confidence * 100)}%.`
-        : 'Parser nije dovoljno siguran. Pokušaj fallback OCR.',
-      found >= 2 ? 'success' : 'warning'
-    );
+    // Popuni rezultat
+    resultSys.value = analysis.reading.sys || '';
+    resultDia.value = analysis.reading.dia || '';
+    resultPulse.value = analysis.reading.pulse || '';
+    const conf = Math.round((analysis.confidence || 0) * 100);
+    resultConfidence.textContent = conf + '%';
+    resultConfidence.className = 'result-confidence ' + (conf >= 70 ? 'high' : 'low');
+    // Sakrij analizu, pokaži rezultat
+    analyzingOverlay.hidden = true;
+    resultOverlay.hidden = false;
   } catch (err) {
     console.error(err);
-    diagTextEl.textContent = String(err?.stack || err);
-    setStatus('Greška u preciznom parseru. Otvori Dijagnostika za detalje.', 'error');
+    showToast('Greška pri analizi: ' + err.message, 'error');
+    analyzingOverlay.hidden = true;
+    captureGuide.hidden = false;
+    cameraVideo.play();
   }
-});
+}
 
-ocrBtn.addEventListener('click', async () => {
-  if (!currentImageBitmap) return alert('Prvo učitaj fotografiju.');
-  const analysis = analyzeOmronPrecise(currentImageBitmap);
-  processedPreview.src = analysis.debug.processedDataUrl;
-  processedPreview.hidden = false;
-  try {
-    setStatus('Pokrećem fallback OCR…', 'info');
-    const { data } = await Tesseract.recognize(analysis.debug.processedDataUrl, 'eng', {
-      logger: m => { if (m.status) setStatus(`${m.status}${m.progress ? ' ' + Math.round(m.progress * 100) + '%' : ''}`, 'info'); },
-      tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
-      tessedit_char_whitelist: '0123456789:'
-    });
-    const t = normalizeOCRText(data.text || '');
-    const fallback = extractReadingFromText(t);
-    const merged = {
-      sys:   analysis.reading.sys   || fallback.sys,
-      dia:   analysis.reading.dia   || fallback.dia,
-      pulse: analysis.reading.pulse || fallback.pulse,
-      time:  analysis.reading.time  || fallback.time
-    };
-    if (merged.sys)   sysEl.value   = merged.sys;
-    if (merged.dia)   diaEl.value   = merged.dia;
-    if (merged.pulse) pulseEl.value = merged.pulse;
-    if (merged.time) applyDetectedTime(merged.time);
-    diagTextEl.textContent = JSON.stringify({ ...analysis.debug.report, fallbackOCR: t }, null, 2);
-    setStatus('Fallback OCR gotov. Provjeri vrijednosti.', 'success');
-  } catch (err) {
-    console.error(err);
-    diagTextEl.textContent = String(err?.stack || err);
-    setStatus('Greška u fallback OCR-u.', 'error');
+function onRetry() {
+  resultOverlay.hidden = true;
+  captureGuide.hidden = false;
+  cameraVideo.play();
+}
+
+function onSaveResult() {
+  const sys = +resultSys.value, dia = +resultDia.value, pulse = +resultPulse.value;
+  if (!sys || !dia || !pulse) {
+    showToast('Popuni sve vrijednosti', 'error');
+    return;
   }
-});
-
-readingForm.addEventListener('submit', e => {
-  e.preventDefault();
   const entry = {
     id: crypto.randomUUID(),
-    sys: Number(sysEl.value),
-    dia: Number(diaEl.value),
-    pulse: Number(pulseEl.value),
-    timestamp: timestampEl.value,
-    note: noteEl.value.trim(),
+    sys, dia, pulse,
+    timestamp: lastAnalysis?.reading.time
+      ? combineDateWithTime(new Date(), lastAnalysis.reading.time)
+      : new Date().toISOString(),
     createdAt: new Date().toISOString(),
-    source: lastAnalysis ? 'omron-precise-3.12' : 'manual'
+    source: 'omron-precise-4.0',
+    confidence: lastAnalysis?.confidence
   };
-  if (!entry.sys || !entry.dia || !entry.pulse || !entry.timestamp) return alert('Ispuni SYS, DIA, puls i datum/vrijeme.');
-  const items = getHistory();
-  items.unshift(entry);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  renderHistory();
-  noteEl.value = '';
-  setDefaultTimestamp();
-  setStatus('Mjerenje spremljeno.', 'success');
-});
+  addEntry(entry);
+  showToast('Mjerenje spremljeno ✓', 'success');
+  showScreen('home');
+}
 
-exportBtn.addEventListener('click', () => {
+function combineDateWithTime(date, hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date(date);
+  d.setHours(h, m, 0, 0);
+  return d.toISOString();
+}
+
+// ============================================================
+//                  MANUAL UNOS
+// ============================================================
+function openManualNew() {
+  editingId = null;
+  manualTitle.textContent = 'Novo mjerenje';
+  manualSys.value = ''; manualDia.value = ''; manualPulse.value = '';
+  manualNote.value = '';
+  setDefaultTime(manualTime);
+  showScreen('manual');
+  setTimeout(() => manualSys.focus(), 100);
+}
+function openManualEdit(id) {
+  const item = getHistory().find(x => x.id === id);
+  if (!item) return;
+  editingId = id;
+  manualTitle.textContent = 'Uredi mjerenje';
+  manualSys.value = item.sys;
+  manualDia.value = item.dia;
+  manualPulse.value = item.pulse;
+  manualNote.value = item.note || '';
+  manualTime.value = (item.timestamp || item.createdAt).slice(0, 16);
+  showScreen('manual');
+}
+function setDefaultTime(input) {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  input.value = now.toISOString().slice(0, 16);
+}
+function onManualSave() {
+  const sys = +manualSys.value, dia = +manualDia.value, pulse = +manualPulse.value;
+  if (!sys || !dia || !pulse) {
+    showToast('Popuni SYS, DIA i PULS', 'error');
+    return;
+  }
+  if (!manualTime.value) {
+    showToast('Postavi datum/vrijeme', 'error');
+    return;
+  }
+  const entry = {
+    id: editingId || crypto.randomUUID(),
+    sys, dia, pulse,
+    note: manualNote.value.trim(),
+    timestamp: new Date(manualTime.value).toISOString(),
+    createdAt: editingId ? getHistory().find(x => x.id === editingId)?.createdAt : new Date().toISOString(),
+    source: editingId ? 'edited' : 'manual'
+  };
+  if (editingId) updateEntry(editingId, entry);
+  else addEntry(entry);
+  showToast(editingId ? 'Mjerenje ažurirano ✓' : 'Mjerenje spremljeno ✓', 'success');
+  showScreen('home');
+}
+
+// ============================================================
+//                  IZBORNIK
+// ============================================================
+function exportCSV() {
   const items = getHistory();
-  if (!items.length) return alert('Nema spremljenih mjerenja.');
-  const header = ['datum_vrijeme', 'sys', 'dia', 'puls', 'napomena', 'izvor'];
-  const rows = items.map(x => [x.timestamp, x.sys, x.dia, x.pulse, csvEscape(x.note || ''), csvEscape(x.source || '')]);
-  const csv = [header.join(','), ...rows.map(r => r.join(','))].join('\n');
+  if (!items.length) {
+    showToast('Nema podataka za izvoz', 'error');
+    return;
+  }
+  const hdr = ['datum_vrijeme', 'sys', 'dia', 'puls', 'napomena', 'izvor'];
+  const csvEsc = s => `"${String(s).replaceAll('"', '""')}"`;
+  const rows = items.map(x => [
+    x.timestamp || x.createdAt, x.sys, x.dia, x.pulse,
+    csvEsc(x.note || ''), csvEsc(x.source || '')
+  ]);
+  const csv = [hdr.join(','), ...rows.map(r => r.join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'tlakomjer_povijest.csv'; a.click();
+  a.href = url;
+  a.download = `tlakomjer_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-});
+  showToast('CSV preuzet ✓', 'success');
+}
 
-clearBtn.addEventListener('click', () => {
-  if (!confirm('Obrisati cijelu povijest mjerenja?')) return;
+function clearAll() {
+  if (!confirm('Obrisati SVA mjerenja? Ova akcija je nepovratna.')) return;
   localStorage.removeItem(STORAGE_KEY);
   renderHistory();
-  setStatus('Povijest obrisana.', 'success');
+  showToast('Povijest obrisana', 'success');
+}
+
+function showDiagnostics() {
+  if (!lastAnalysis) {
+    showToast('Snimi mjerenje prvo', 'error');
+    return;
+  }
+  diagOrigImg.src = lastAnalysis.debug.previewDataUrl;
+  diagProcImg.src = lastAnalysis.debug.processedDataUrl;
+  diagJsonText.textContent = JSON.stringify(lastAnalysis.debug.report, null, 2);
+  showDiagTab('orig');
+  diagModal.hidden = false;
+}
+function showDiagTab(which) {
+  diagOrigImg.hidden = which !== 'orig';
+  diagProcImg.hidden = which !== 'processed';
+  diagJsonText.hidden = which !== 'json';
+  document.querySelectorAll('.diag-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === which);
+  });
+}
+
+// ============================================================
+//                  EVENT LISTENERS
+// ============================================================
+captureBtn.addEventListener('click', async () => {
+  showScreen('camera');
+  await startCamera();
+});
+manualBtn.addEventListener('click', openManualNew);
+manualBackBtn.addEventListener('click', () => showScreen('home'));
+manualSaveBtn.addEventListener('click', onManualSave);
+
+cameraCloseBtn.addEventListener('click', () => {
+  // Ako je rezultat overlay open, samo ga zatvori
+  if (!resultOverlay.hidden) {
+    resultOverlay.hidden = true;
+    captureGuide.hidden = false;
+    cameraVideo.play();
+    return;
+  }
+  showScreen('home');
+});
+cameraFlipBtn.addEventListener('click', flipCamera);
+snapBtn.addEventListener('click', onSnap);
+resultRetryBtn.addEventListener('click', onRetry);
+resultSaveBtn.addEventListener('click', onSaveResult);
+
+menuBtn.addEventListener('click', () => menuOverlay.hidden = false);
+menuCloseBtn.addEventListener('click', () => menuOverlay.hidden = true);
+menuOverlay.addEventListener('click', e => {
+  if (e.target === menuOverlay) menuOverlay.hidden = true;
+});
+menuExportBtn.addEventListener('click', () => { menuOverlay.hidden = true; exportCSV(); });
+menuClearBtn.addEventListener('click', () => { menuOverlay.hidden = true; clearAll(); });
+menuDiagBtn.addEventListener('click', () => { menuOverlay.hidden = true; showDiagnostics(); });
+
+diagCloseBtn.addEventListener('click', () => diagModal.hidden = true);
+diagModal.addEventListener('click', e => {
+  if (e.target === diagModal) diagModal.hidden = true;
+});
+document.querySelectorAll('.diag-tab').forEach(t => {
+  t.addEventListener('click', () => showDiagTab(t.dataset.tab));
 });
 
-async function loadImageFile(file) {
-  const url = URL.createObjectURL(file);
-  preview.src = url; preview.hidden = false;
-  processedPreview.hidden = true;
-  currentImageBitmap = await createImageBitmap(file);
-  lastAnalysis = null;
-  setStatus('Fotografija učitana. Klikni "Precizni OMRON parser".', 'success');
+// Zatvori kameru kad korisnik napusti tab
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && cameraStream) stopCamera();
+});
+
+// ============================================================
+//                  PWA: Service Worker + Install
+// ============================================================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(err => console.warn('SW reg fail', err));
+  });
 }
+
+// ============================================================
+//                  STARTUP
+// ============================================================
+renderHistory();
+showScreen('home');
 
 // ============================================================
 //                     MAIN ANALYSIS
