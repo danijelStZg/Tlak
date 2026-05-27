@@ -6,6 +6,20 @@
 // ============================================================
 const $ = id => document.getElementById(id);
 
+// UUID fallback — crypto.randomUUID je dostupan SAMO u secure context (HTTPS/localhost).
+// Bez ovoga, klikanje "Spremi" baca grešku na HTTP serverima.
+function makeUUID() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    try { return crypto.randomUUID(); } catch (e) { /* fallthrough */ }
+  }
+  // RFC4122 v4 fallback (ne kriptografski siguran, ali dovoljno za lokalne ID-eve)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 // Ekrani
 const screenHome   = $('screenHome');
 const screenCamera = $('screenCamera');
@@ -13,6 +27,7 @@ const screenManual = $('screenManual');
 
 // Home
 const captureBtn  = $('captureBtn');
+const cameraFileInput = $('cameraFileInput');
 const manualBtn   = $('manualBtn');
 const menuBtn     = $('menuBtn');
 const historyList = $('historyList');
@@ -81,9 +96,21 @@ function showScreen(which) {
   screenHome.hidden = which !== 'home';
   screenCamera.hidden = which !== 'camera';
   screenManual.hidden = which !== 'manual';
-  // Ako napustimo kameru, ugasi je
+  // Ako napustimo kameru, ugasi je i resetiraj UI
   if (which !== 'camera' && cameraStream) {
     stopCamera();
+  }
+  if (which !== 'camera') {
+    // Reset overlays
+    if (analyzingOverlay) analyzingOverlay.hidden = true;
+    if (resultOverlay) resultOverlay.hidden = true;
+    if (captureGuide) captureGuide.hidden = false;
+    const snapBar = document.querySelector('.snap-bar');
+    if (snapBar) snapBar.style.display = '';
+    if (cameraVideo) {
+      cameraVideo.hidden = false;
+      cameraVideo.poster = '';
+    }
   }
 }
 
@@ -137,8 +164,11 @@ function renderHistory() {
   // Sortiraj po timestamp DESC
   items.sort((a, b) => (b.timestamp || b.createdAt).localeCompare(a.timestamp || a.createdAt));
 
+  // Detach emptyState ako je u DOM-u
+  if (emptyState.parentNode) emptyState.parentNode.removeChild(emptyState);
+  historyList.innerHTML = '';
+
   if (!items.length) {
-    historyList.innerHTML = '';
     historyList.appendChild(emptyState);
     statsBar.hidden = true;
     return;
@@ -220,11 +250,28 @@ function escapeHtml(s) {
 // ============================================================
 async function startCamera() {
   if (cameraStream) return;
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showToast('Kamera nije podržana', 'error');
-    showScreen('home');
+
+  // 1) Provjeri secure context — getUserMedia traži HTTPS ili localhost
+  if (!window.isSecureContext) {
+    showCameraError(
+      'Kamera zahtijeva HTTPS',
+      'Browser dopušta pristup kameri samo na sigurnoj vezi (HTTPS) ili localhost-u. ' +
+      'Otvori aplikaciju preko HTTPS URL-a, ili koristi ručni unos.',
+      true
+    );
     return;
   }
+
+  // 2) Provjeri da li getUserMedia uopće postoji
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showCameraError(
+      'Kamera nije podržana',
+      'Tvoj browser ne podržava pristup kameri. Koristi noviju verziju Chrome/Safari/Firefox-a.',
+      true
+    );
+    return;
+  }
+
   try {
     cameraStream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -237,9 +284,42 @@ async function startCamera() {
     cameraVideo.srcObject = cameraStream;
     await cameraVideo.play();
   } catch (err) {
-    console.error(err);
-    showToast('Kamera nije dostupna: ' + (err.message || err), 'error');
-    showScreen('home');
+    console.error('Camera error:', err);
+    let title = 'Greška kamere';
+    let msg = err.message || String(err);
+    // Mapiraj poznate greške
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      title = 'Pristup kameri odbijen';
+      msg = 'Dopusti pristup kameri u postavkama browsera i pokušaj opet.';
+    } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      title = 'Kamera nije pronađena';
+      msg = 'Uređaj nema dostupnu kameru.';
+    } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+      title = 'Kamera je zauzeta';
+      msg = 'Druga aplikacija već koristi kameru. Zatvori ju i pokušaj opet.';
+    } else if (err.name === 'OverconstrainedError') {
+      title = 'Kamera ne podržava traženu rezoluciju';
+      msg = 'Pokušavam s drugim postavkama…';
+      // Retry s minimalnim constraintima
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        cameraVideo.srcObject = cameraStream;
+        await cameraVideo.play();
+        return;
+      } catch (e2) {
+        msg = 'Nije uspjelo ni s minimalnim postavkama: ' + (e2.message || e2);
+      }
+    }
+    showCameraError(title, msg, true);
+  }
+}
+
+// Prikaži grešku kamere kao full-screen poruku unutar camera screen-a
+function showCameraError(title, msg, goHome) {
+  showToast(title + ': ' + msg, 'error');
+  console.warn('[Camera]', title, msg);
+  if (goHome) {
+    setTimeout(() => showScreen('home'), 100);
   }
 }
 function stopCamera() {
@@ -300,8 +380,15 @@ async function onSnap() {
 
 function onRetry() {
   resultOverlay.hidden = true;
-  captureGuide.hidden = false;
-  cameraVideo.play();
+  if (cameraStream) {
+    // Live mode — vrati guide i resume video
+    captureGuide.hidden = false;
+    cameraVideo.play();
+  } else {
+    // File mode — vrati na home da korisnik pokuša ponovo
+    showScreen('home');
+    setTimeout(() => cameraFileInput.click(), 100);
+  }
 }
 
 function onSaveResult() {
@@ -311,7 +398,7 @@ function onSaveResult() {
     return;
   }
   const entry = {
-    id: crypto.randomUUID(),
+    id: makeUUID(),
     sys, dia, pulse,
     timestamp: lastAnalysis?.reading.time
       ? combineDateWithTime(new Date(), lastAnalysis.reading.time)
@@ -372,7 +459,7 @@ function onManualSave() {
     return;
   }
   const entry = {
-    id: editingId || crypto.randomUUID(),
+    id: editingId || makeUUID(),
     sys, dia, pulse,
     note: manualNote.value.trim(),
     timestamp: new Date(manualTime.value).toISOString(),
@@ -441,10 +528,70 @@ function showDiagTab(which) {
 // ============================================================
 //                  EVENT LISTENERS
 // ============================================================
+// ============================================================
+//                  CAPTURE BUTTON LOGIC
+// ============================================================
+// Strategija:
+//  1) Ako smo u secure context (HTTPS / localhost) — koristi live kameru (getUserMedia).
+//  2) Inače — fallback na file input s capture="environment" (otvori OS kameru).
+//     Slika dolazi kao File pa idemo u alternativni tijek "analiziraj sliku, prikaži rezultat".
 captureBtn.addEventListener('click', async () => {
-  showScreen('camera');
-  await startCamera();
+  if (window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+    // Live kamera
+    showScreen('camera');
+    await startCamera();
+  } else {
+    // Fallback — nativna kamera preko file input-a
+    console.log('[Capture] Secure context unavailable, using file input fallback');
+    cameraFileInput.click();
+  }
 });
+
+cameraFileInput.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';  // omogući biranje iste slike opet kasnije
+  if (!file) return;
+  await analyzeFileImage(file);
+});
+
+// Analiza slike iz File-a (od file inputa) — pokaži result direktno
+async function analyzeFileImage(file) {
+  showScreen('camera');  // koristimo camera screen za prikaz rezultata
+  captureGuide.hidden = true;
+  cameraVideo.hidden = true;
+  analyzingOverlay.hidden = false;
+  document.querySelector('.snap-bar').style.display = 'none';
+  try {
+    const bmp = await createImageBitmap(file);
+    lastSnapBitmap = bmp;
+    // Prikaži sliku u pozadini (umjesto video)
+    const ctx = captureCanvas.getContext('2d');
+    captureCanvas.width = bmp.width; captureCanvas.height = bmp.height;
+    ctx.drawImage(bmp, 0, 0);
+    // Promijeni video element na static image preview
+    cameraVideo.poster = captureCanvas.toDataURL('image/jpeg', 0.8);
+    cameraVideo.hidden = false;
+    await new Promise(r => setTimeout(r, 50));
+    const analysis = analyzeOmronPrecise(bmp);
+    lastAnalysis = analysis;
+    fillResultOverlay(analysis);
+    analyzingOverlay.hidden = true;
+    resultOverlay.hidden = false;
+  } catch (err) {
+    console.error('File analyze error:', err);
+    showToast('Greška pri analizi: ' + err.message, 'error');
+    showScreen('home');
+  }
+}
+
+function fillResultOverlay(analysis) {
+  resultSys.value = analysis.reading.sys || '';
+  resultDia.value = analysis.reading.dia || '';
+  resultPulse.value = analysis.reading.pulse || '';
+  const conf = Math.round((analysis.confidence || 0) * 100);
+  resultConfidence.textContent = conf + '%';
+  resultConfidence.className = 'result-confidence ' + (conf >= 70 ? 'high' : 'low');
+}
 manualBtn.addEventListener('click', openManualNew);
 manualBackBtn.addEventListener('click', () => showScreen('home'));
 manualSaveBtn.addEventListener('click', onManualSave);
@@ -452,9 +599,15 @@ manualSaveBtn.addEventListener('click', onManualSave);
 cameraCloseBtn.addEventListener('click', () => {
   // Ako je rezultat overlay open, samo ga zatvori
   if (!resultOverlay.hidden) {
-    resultOverlay.hidden = true;
-    captureGuide.hidden = false;
-    cameraVideo.play();
+    if (cameraStream) {
+      resultOverlay.hidden = true;
+      captureGuide.hidden = false;
+      cameraVideo.play();
+    } else {
+      // File mode — samo se vrati doma
+      resultOverlay.hidden = true;
+      showScreen('home');
+    }
     return;
   }
   showScreen('home');
@@ -500,6 +653,17 @@ if ('serviceWorker' in navigator) {
 // ============================================================
 renderHistory();
 showScreen('home');
+
+// Dijagnostika kapaciteta
+console.log('[Startup] Tlakomjer v4.1');
+console.log('[Startup] Secure context:', window.isSecureContext);
+console.log('[Startup] getUserMedia available:', !!navigator.mediaDevices?.getUserMedia);
+console.log('[Startup] crypto.randomUUID available:', !!(typeof crypto !== 'undefined' && crypto.randomUUID));
+if (!window.isSecureContext) {
+  console.warn('[Startup] Aplikacija NIJE u secure context — live kamera neće raditi.');
+  console.warn('[Startup] Koristit će se file-input fallback (nativna kamera preko OS-a).');
+  console.warn('[Startup] Za live preview deploy preko HTTPS (npr. GitHub Pages, Netlify, Vercel).');
+}
 
 // ============================================================
 //                     MAIN ANALYSIS

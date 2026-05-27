@@ -1,5 +1,5 @@
 // Tlakomjer SW v4.0 — offline support
-const CACHE = 'tlakomjer-v4-0';
+const CACHE = 'tlakomjer-v4-1';
 const ASSETS = [
   './',
   './index.html',
