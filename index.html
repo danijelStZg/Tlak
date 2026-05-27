@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./style.css" />
+  <title>Tlakomjer</title>
+</head>
+<body>
+
+<!-- ============================================================
+     GLAVNI EKRAN — lista mjerenja + gumb za snimanje
+     ============================================================ -->
+<div id="screenHome" class="screen">
+  <header class="app-header">
+    <div class="app-header-row">
+      <h1>Tlakomjer</h1>
+      <button id="menuBtn" class="icon-btn" aria-label="Izbornik">⋮</button>
+    </div>
+    <div id="statsBar" class="stats-bar" hidden>
+      <div class="stat"><span class="stat-label">Prosjek</span><span id="statAvg">—</span></div>
+      <div class="stat"><span class="stat-label">Mjerenja</span><span id="statCount">0</span></div>
+      <div class="stat"><span class="stat-label">Posljednje</span><span id="statLast">—</span></div>
+    </div>
+  </header>
+
+  <main id="historyList" class="history-list">
+    <div id="emptyState" class="empty-state">
+      <div class="empty-icon">📋</div>
+      <h2>Još nema mjerenja</h2>
+      <p>Pritisni gumb dolje za prvo mjerenje</p>
+    </div>
+  </main>
+
+  <div class="fab-container">
+    <button id="captureBtn" class="fab">
+      <span class="fab-icon">📷</span>
+      <span class="fab-text">Snimi</span>
+    </button>
+    <button id="manualBtn" class="fab fab-secondary" aria-label="Ručni unos">
+      <span class="fab-icon">✏️</span>
+    </button>
+  </div>
+</div>
+
+<!-- ============================================================
+     EKRAN KAMERE — live preview + capture overlay
+     ============================================================ -->
+<div id="screenCamera" class="screen camera-screen" hidden>
+  <video id="cameraVideo" playsinline autoplay muted></video>
+  <canvas id="captureCanvas" hidden></canvas>
+
+  <!-- Capture overlay: vodilica za frejmanje LCD-a -->
+  <div id="captureGuide" class="capture-guide">
+    <div class="guide-frame"></div>
+    <div class="guide-text">Uokviri zaslon tlakomjera</div>
+  </div>
+
+  <!-- Loading dok analiza radi -->
+  <div id="analyzingOverlay" class="analyzing-overlay" hidden>
+    <div class="spinner"></div>
+    <div class="analyzing-text">Analiziram…</div>
+  </div>
+
+  <!-- Rezultat overlay: SYS/DIA/PULS preko slike, korisnik potvrdi/uredi -->
+  <div id="resultOverlay" class="result-overlay" hidden>
+    <div class="result-card">
+      <div class="result-header">
+        <span class="result-title">Očitano</span>
+        <span id="resultConfidence" class="result-confidence"></span>
+      </div>
+      <div class="result-row">
+        <label>SYS</label>
+        <input id="resultSys" type="number" inputmode="numeric" min="40" max="260" />
+        <span class="result-unit">mmHg</span>
+      </div>
+      <div class="result-row">
+        <label>DIA</label>
+        <input id="resultDia" type="number" inputmode="numeric" min="30" max="180" />
+        <span class="result-unit">mmHg</span>
+      </div>
+      <div class="result-row">
+        <label>PULS</label>
+        <input id="resultPulse" type="number" inputmode="numeric" min="30" max="220" />
+        <span class="result-unit">/min</span>
+      </div>
+      <div class="result-actions">
+        <button id="resultRetryBtn" class="btn-secondary">Ponovo</button>
+        <button id="resultSaveBtn" class="btn-primary">Spremi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Header kamere s zatvori gumbom -->
+  <div class="camera-header">
+    <button id="cameraCloseBtn" class="icon-btn-dark" aria-label="Zatvori">✕</button>
+    <button id="cameraFlipBtn" class="icon-btn-dark" aria-label="Promijeni kameru">🔄</button>
+  </div>
+
+  <!-- Snap gumb -->
+  <div id="snapBar" class="snap-bar">
+    <button id="snapBtn" class="snap-btn" aria-label="Uslikaj"></button>
+  </div>
+</div>
+
+<!-- ============================================================
+     EKRAN RUČNOG UNOSA
+     ============================================================ -->
+<div id="screenManual" class="screen" hidden>
+  <header class="app-header">
+    <div class="app-header-row">
+      <button id="manualBackBtn" class="icon-btn" aria-label="Natrag">←</button>
+      <h1 id="manualTitle">Novo mjerenje</h1>
+      <span class="spacer"></span>
+    </div>
+  </header>
+
+  <main class="manual-form">
+    <div class="form-row">
+      <label for="manualSys">SYS</label>
+      <div class="input-with-unit">
+        <input id="manualSys" type="number" inputmode="numeric" min="40" max="260" />
+        <span>mmHg</span>
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="manualDia">DIA</label>
+      <div class="input-with-unit">
+        <input id="manualDia" type="number" inputmode="numeric" min="30" max="180" />
+        <span>mmHg</span>
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="manualPulse">PULS</label>
+      <div class="input-with-unit">
+        <input id="manualPulse" type="number" inputmode="numeric" min="30" max="220" />
+        <span>/min</span>
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="manualTime">Datum/vrijeme</label>
+      <input id="manualTime" type="datetime-local" />
+    </div>
+    <div class="form-row">
+      <label for="manualNote">Napomena</label>
+      <textarea id="manualNote" rows="2" placeholder="Npr. prije lijeka"></textarea>
+    </div>
+    <button id="manualSaveBtn" class="btn-primary btn-full">Spremi mjerenje</button>
+  </main>
+</div>
+
+<!-- ============================================================
+     IZBORNIK (drawer)
+     ============================================================ -->
+<div id="menuOverlay" class="menu-overlay" hidden>
+  <div class="menu-sheet">
+    <button id="menuExportBtn" class="menu-item">📤 Izvoz u CSV</button>
+    <button id="menuClearBtn" class="menu-item menu-item-danger">🗑 Obriši sve</button>
+    <button id="menuDiagBtn" class="menu-item">🔧 Dijagnostika</button>
+    <button id="menuCloseBtn" class="menu-item menu-item-cancel">Zatvori</button>
+  </div>
+</div>
+
+<!-- ============================================================
+     DIJAGNOSTIKA (modal)
+     ============================================================ -->
+<div id="diagModal" class="modal" hidden>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Dijagnostika</h2>
+      <button id="diagCloseBtn" class="icon-btn" aria-label="Zatvori">✕</button>
+    </div>
+    <div class="diag-tabs">
+      <button class="diag-tab active" data-tab="orig">Original</button>
+      <button class="diag-tab" data-tab="processed">Procesirano</button>
+      <button class="diag-tab" data-tab="json">JSON</button>
+    </div>
+    <div class="diag-content">
+      <img id="diagOrigImg" hidden />
+      <img id="diagProcImg" hidden />
+      <pre id="diagJsonText" hidden></pre>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST notifikacije -->
+<div id="toast" class="toast" hidden></div>
+
+<!-- TESSERACT samo za fallback OCR -->
+<canvas id="workCanvas" hidden style="position:absolute;left:-99999px"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+<script src="./app.js" defer></script>
+</body>
+</html>
